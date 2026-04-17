@@ -1,26 +1,347 @@
-// The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
+import { runTimeTraceAnalysis } from './ai/runTimeTraceAnalysis';
+import { SnapshotStore } from './ai/snapshotStore';
+import type { TimeTraceAnalysisResult } from './ai';
 
-// This method is called when your extension is activated
-// Your extension is activated the very first time the command is executed
-export function activate(context: vscode.ExtensionContext) {
-
-	// Use the console to output diagnostic information (console.log) and errors (console.error)
-	// This line of code will only be executed once when your extension is activated
-	console.log('Congratulations, your extension "timetrace-ai" is now active!');
-
-	// The command has been defined in the package.json file
-	// Now provide the implementation of the command with registerCommand
-	// The commandId parameter must match the command field in package.json
-	const disposable = vscode.commands.registerCommand('timetrace-ai.helloWorld', () => {
-		// The code you place here will be executed every time your command is executed
-		// Display a message box to the user
-		vscode.window.showInformationMessage('Hello World from timetrace-ai!');
-	});
-
-	context.subscriptions.push(disposable);
+interface SidebarAnalysisPayload {
+	filePath: string;
+	timestamp: string;
+	state: TimeTraceAnalysisResult['state'];
+	score: number;
+	checkpoint: boolean;
+	previousState: TimeTraceAnalysisResult['previousState'];
+	reasons: string[];
+	analysis: string;
+	changedLineRanges: number[][];
+	features: TimeTraceAnalysisResult['features'];
+	codePreview: {
+		before: string[];
+		after: string[];
+		focusLine: number;
+	};
 }
 
-// This method is called when your extension is deactivated
+function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): SidebarAnalysisPayload['codePreview'] {
+	const previousLines = previousCode.split(/\r?\n/);
+	const currentLines = currentCode.split(/\r?\n/);
+	const firstRange = changedLineRanges[0] ?? [1, 1];
+	const startLine = Math.max(1, firstRange[0]);
+	const endLine = Math.max(startLine, firstRange[1]);
+	const previewStart = Math.max(1, startLine - 2);
+	const previewEnd = endLine + 2;
+
+	return {
+		before: previousLines.slice(previewStart - 1, previewEnd),
+		after: currentLines.slice(previewStart - 1, previewEnd),
+		focusLine: Math.max(1, startLine - previewStart + 1),
+	};
+}
+
+export function activate(context: vscode.ExtensionContext) {
+	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
+	const snapshotStore = new SnapshotStore(context.globalState);
+	const provider = new TimeTraceSidebarProvider(context.extensionUri);
+
+	function analyzeDocument(document: vscode.TextDocument) {
+		if (document.isUntitled || document.uri.scheme !== 'file') {
+			return undefined;
+		}
+
+		const previousSnapshot = snapshotStore.getSnapshot(document.uri.fsPath);
+		const currentCode = document.getText();
+
+		if (!previousSnapshot) {
+			snapshotStore.saveSnapshot({
+				filePath: document.uri.fsPath,
+				language: document.languageId,
+				timestamp: new Date().toISOString(),
+				code: currentCode,
+			});
+			outputChannel.appendLine(`[baseline] Stored snapshot for ${document.uri.fsPath}`);
+			return undefined;
+		}
+
+		const result = runTimeTraceAnalysis({
+			filePath: document.uri.fsPath,
+			language: document.languageId,
+			timestamp: new Date().toISOString(),
+			previousCode: previousSnapshot.code,
+			currentCode,
+			previousState: previousSnapshot.state,
+		});
+
+		snapshotStore.saveSnapshot({
+			filePath: document.uri.fsPath,
+			language: document.languageId,
+			timestamp: new Date().toISOString(),
+			code: currentCode,
+			state: result.state,
+		});
+		snapshotStore.saveLatestAnalysis({
+			filePath: document.uri.fsPath,
+			timestamp: new Date().toISOString(),
+			result,
+		});
+
+		outputChannel.appendLine(JSON.stringify(result, null, 2));
+		vscode.window.setStatusBarMessage(`TimeTrace AI: ${result.state} (${result.score})`, 4000);
+		provider.publishAnalysis({
+			filePath: document.uri.fsPath,
+			timestamp: new Date().toISOString(),
+			state: result.state,
+			score: result.score,
+			checkpoint: result.checkpoint,
+			previousState: result.previousState,
+			reasons: result.reasons,
+			analysis: result.analysis,
+			changedLineRanges: result.changedLineRanges,
+			features: result.features,
+			codePreview: buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges),
+		});
+		if (result.checkpoint) {
+			void vscode.window.showInformationMessage(`TimeTrace AI checkpoint: ${result.analysis}`);
+		}
+		return result;
+	}
+
+	context.subscriptions.push(outputChannel);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(TimeTraceSidebarProvider.viewType, provider),
+		vscode.commands.registerCommand('timetrace-ai.openSidebar', async () => {
+			await vscode.commands.executeCommand('workbench.view.extension.timetraceAi');
+			await vscode.commands.executeCommand('timetraceAi.sidebar.focus');
+		})
+	);
+	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
+		analyzeDocument(document);
+	}));
+
+	const helloWorldCommand = vscode.commands.registerCommand('timetrace-ai.helloWorld', () => {
+		void vscode.window.showInformationMessage('Hello World from timetrace-ai!');
+	});
+
+	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			void vscode.window.showWarningMessage('Open a file first to analyze it.');
+			return;
+		}
+
+		const result = analyzeDocument(editor.document);
+		if (!result) {
+			void vscode.window.showInformationMessage('Baseline snapshot captured. Edit and save the file again to trigger analysis.');
+			return;
+		}
+
+		void vscode.window.showInformationMessage(`TimeTrace AI ${result.state}: ${result.analysis}`);
+	});
+
+	const showLatestAnalysisCommand = vscode.commands.registerCommand('timetrace-ai.showLatestAnalysis', () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			void vscode.window.showWarningMessage('Open a file first to inspect the latest analysis.');
+			return;
+		}
+
+		const latest = snapshotStore.getLatestAnalysis(editor.document.uri.fsPath);
+		if (!latest) {
+			void vscode.window.showInformationMessage('No saved analysis exists yet for this file.');
+			return;
+		}
+
+		outputChannel.show(true);
+		outputChannel.appendLine(JSON.stringify(latest.result, null, 2));
+		void vscode.window.showInformationMessage(`Latest TimeTrace AI result for ${editor.document.fileName} is available in the output channel.`);
+	});
+
+	context.subscriptions.push(helloWorldCommand, analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
+	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate a checkpoint.');
+	console.log('TimeTrace AI extension activated.');
+}
+
 export function deactivate() {}
+
+class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = 'timetraceAi.sidebar';
+	private webviewView: vscode.WebviewView | undefined;
+
+	public constructor(private readonly extensionUri: vscode.Uri) {}
+
+	public publishAnalysis(payload: SidebarAnalysisPayload): void {
+		if (!this.webviewView) {
+			return;
+		}
+
+		void this.webviewView.webview.postMessage({
+			type: 'analysisResult',
+			payload,
+		});
+	}
+
+	public resolveWebviewView(webviewView: vscode.WebviewView): void {
+		this.webviewView = webviewView;
+		const webview = webviewView.webview;
+		webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
+		};
+
+		webview.html = this.getHtml(webview);
+
+		webview.onDidReceiveMessage((message: { type?: string }) => {
+			if (message.type === 'jumpToRootCause') {
+				void vscode.window.showInformationMessage('Focused root-cause evidence for the selected failure state.');
+			}
+		});
+	}
+
+	private getHtml(webview: vscode.Webview): string {
+		const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'sidebar.css'));
+		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'sidebar.js'));
+		const nonce = getNonce();
+
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+	<title>TimeTrace AI</title>
+	<link rel="stylesheet" href="${styleUri}" />
+</head>
+<body class="theme-auto">
+	<div class="aurora"></div>
+	<main class="panel" role="application" aria-label="TimeTrace AI Sidebar">
+		<header class="header reveal">
+			<h1>TimeTrace AI</h1>
+			<p>Rewind. Analyze. Fix.</p>
+			<div class="header-underline"></div>
+		</header>
+
+		<section class="section hero reveal" id="timeline-section">
+			<div class="section-label">Incident Timeline</div>
+			<div class="scenario-row">
+				<label for="scenario-select">Scenario</label>
+				<select id="scenario-select" aria-label="Select debugging scenario"></select>
+			</div>
+
+			<div class="timeline-wrap" id="timeline-wrap">
+				<div class="timeline-track" id="timeline-track"></div>
+				<div class="timeline-progress" id="timeline-progress"></div>
+				<div class="timeline-nodes" id="timeline-nodes"></div>
+				<input id="scrubber" type="range" min="0" max="2" step="1" value="0" aria-label="Rewind timeline scrubber" />
+			</div>
+
+			<div class="timeline-legend">
+				<span class="pill normal">Normal</span>
+				<span class="pill warning">Warning</span>
+				<span class="pill error">Error</span>
+			</div>
+
+			<button class="btn btn-secondary" id="timeline-replay" type="button">Replay Timeline</button>
+			<div class="playback-row">
+				<label for="replay-speed">Replay Speed</label>
+				<select id="replay-speed" aria-label="Replay speed selector">
+					<option value="slow">Cinematic</option>
+					<option value="normal" selected>Balanced</option>
+					<option value="fast">Rapid</option>
+				</select>
+			</div>
+		</section>
+
+		<section class="card glass reveal" id="error-card">
+			<div class="card-title">Error Details</div>
+			<div class="metrics">
+				<div><span>Type</span><strong id="error-type"></strong></div>
+				<div><span>Line</span><strong id="error-line"></strong></div>
+				<div><span>Timestamp</span><strong id="error-time"></strong></div>
+			</div>
+		</section>
+
+		<section class="card telemetry-card reveal" id="latency-card">
+			<div class="card-title">Latency Trace</div>
+			<div class="sparkline-wrap">
+				<svg class="sparkline" id="sparkline" viewBox="0 0 180 54" preserveAspectRatio="none" aria-label="Latency sparkline">
+					<path id="sparkline-path" class="sparkline-path"></path>
+					<circle id="sparkline-dot" class="sparkline-dot" r="3"></circle>
+				</svg>
+			</div>
+			<div class="sparkline-meta">
+				<span>Current</span>
+				<strong id="latency-value"></strong>
+			</div>
+		</section>
+
+		<section class="card root-cause reveal hidden" id="root-cause-card">
+			<div class="card-title">Root Cause</div>
+			<p id="root-cause-text"></p>
+		</section>
+
+		<section class="card code-card reveal" id="code-card">
+			<div class="card-title">Relevant Code Segment</div>
+			<p class="card-subtitle">Only impacted lines are shown</p>
+			<div class="code-toggle" role="tablist" aria-label="Before and after code states">
+				<button class="toggle-btn active" id="before-tab" data-state="before" type="button">Before</button>
+				<button class="toggle-btn" id="after-tab" data-state="after" type="button">After</button>
+			</div>
+			<pre class="code-window" id="code-window" aria-live="polite"></pre>
+		</section>
+
+		<section class="card flow-card reveal" id="impact-flow-card">
+			<div class="card-title">Impact Flow</div>
+			<div class="flow" id="impact-flow" aria-label="System impact flow"></div>
+		</section>
+
+		<section class="card analysis-card reveal" id="analysis-card">
+			<div class="card-title">AI Analysis</div>
+			<div class="analysis-block">
+				<h3>Summary</h3>
+				<p id="analysis-summary"></p>
+			</div>
+			<div class="analysis-block">
+				<h3>Root Cause</h3>
+				<p id="analysis-cause"></p>
+			</div>
+			<div class="analysis-block">
+				<h3>Impact</h3>
+				<p id="analysis-impact"></p>
+			</div>
+		</section>
+
+		<section class="card control-card reveal">
+			<div class="card-title">Controls</div>
+			<div class="control-grid">
+				<button class="btn" id="jump-root" type="button">Jump to Root Cause</button>
+				<button class="btn btn-secondary" id="replay" type="button">Replay</button>
+				<button class="btn btn-tertiary" id="previous" type="button">Previous</button>
+				<button class="btn btn-tertiary" id="next" type="button">Next</button>
+			</div>
+			<div class="footer-row">
+				<span>Theme</span>
+				<button class="theme-toggle" id="theme-toggle" type="button">Auto</button>
+			</div>
+			<div class="footer-row">
+				<span>Typography</span>
+				<button class="theme-toggle" id="font-toggle" type="button">Mono</button>
+			</div>
+			<p class="hint">Shortcuts: ← / → navigate timeline, Space replay</p>
+		</section>
+	</main>
+
+	<script nonce="${nonce}">
+		window.__timetraceApi = acquireVsCodeApi();
+	</script>
+	<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+	}
+}
+
+function getNonce(): string {
+	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	let nonce = '';
+	for (let i = 0; i < 32; i += 1) {
+		nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return nonce;
+}

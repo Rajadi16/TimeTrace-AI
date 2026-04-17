@@ -9,13 +9,48 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:timetrace-ai.openSidebar",
+    "onCommand:timetrace-ai.analyzeCurrentDocument",
+    "onCommand:timetrace-ai.showLatestAnalysis"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "timetraceAi",
+          "title": "TimeTrace AI",
+          "icon": "media/timetrace.svg"
+        }
+      ]
+    },
+    "views": {
+      "timetraceAi": [
+        {
+          "id": "timetraceAi.sidebar",
+          "name": "TimeTrace AI",
+          "type": "webview"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "timetrace-ai.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "timetrace-ai.openSidebar",
+        "title": "TimeTrace AI: Focus Sidebar"
+      },
+      {
+        "command": "timetrace-ai.analyzeCurrentDocument",
+        "title": "TimeTrace AI: Analyze Current Document"
+      },
+      {
+        "command": "timetrace-ai.showLatestAnalysis",
+        "title": "TimeTrace AI: Show Latest Analysis"
       }
     ]
   },
