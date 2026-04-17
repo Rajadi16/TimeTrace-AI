@@ -62,6 +62,8 @@ function createCheckpointRecord(index: number, filePath = '/tmp/example.ts'): Ti
 			focusLine: 1,
 		},
 		findings: [],
+		probableRootCauses: [],
+		incidents: [],
 		impactedFiles: [],
 		relatedFiles: [],
 	};
