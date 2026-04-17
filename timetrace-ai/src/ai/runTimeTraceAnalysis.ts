@@ -1,5 +1,4 @@
-import { analyzeChange } from './analyzeChange';
-import { updateIncidents } from './incidentEngine';
+import { analyzeChange, type AnalyzeChangeContext } from './analyzeChange';
 import type { AnalyzeChangeInput, AnalysisState, FeatureSet, Finding, Incident, RootCauseCandidate } from './types';
 
 /**
@@ -13,23 +12,23 @@ import type { AnalyzeChangeInput, AnalysisState, FeatureSet, Finding, Incident, 
  *   previousCode,
  *   currentCode,
  *   previousState,
- * });
+ * }, context);
  *
  * Use:
- * - state for the severity badge
- * - checkpoint for timeline markers
- * - analysis + reasons for the explanation panel
- * - changedLineRanges for code highlighting
- * - features only for optional debug/details
+ * - state / score / checkpoint / reasons / analysis  → backward-compatible UI fields
+ * - findings                                         → structured per-issue details
+ * - probableRootCauses                               → ranked, not certain
+ * - incidents                                        → persistent lifecycle tracking
+ * - impactedFiles / relatedFiles                     → dependency-aware impact
+ * - changedLineRanges                                → code highlighting
+ * - features                                         → optional debug/details
  */
 export interface TimeTraceAnalysisInput extends AnalyzeChangeInput {
 	previousState?: AnalysisState;
-	existingIncidents?: Incident[];
 }
 
 export interface TimeTraceAnalysisResult {
-	schemaVersion: '2.0';
-	checkpointId: string;
+	// ---- Backward-compatible fields (do not remove or rename) ----
 	state: AnalysisState;
 	score: number;
 	checkpoint: boolean;
@@ -38,18 +37,18 @@ export interface TimeTraceAnalysisResult {
 	analysis: string;
 	changedLineRanges: number[][];
 	features: FeatureSet;
+	// ---- New structured fields ----
 	findings: Finding[];
-	impactedFiles: string[];
-	relatedFiles: string[];
 	probableRootCauses: RootCauseCandidate[];
 	incidents: Incident[];
+	impactedFiles: string[];
+	relatedFiles: string[];
 }
 
-export function runTimeTraceAnalysis(input: TimeTraceAnalysisInput): TimeTraceAnalysisResult {
-	const { confidence: _confidence, ...analysis } = analyzeChange(input);
-	const incidents = updateIncidents(input.existingIncidents ?? [], analysis);
-	return {
-		...analysis,
-		incidents,
-	};
+export function runTimeTraceAnalysis(
+	input: TimeTraceAnalysisInput,
+	context?: AnalyzeChangeContext,
+): TimeTraceAnalysisResult {
+	const { confidence: _confidence, ...uiResult } = analyzeChange(input, context);
+	return uiResult;
 }

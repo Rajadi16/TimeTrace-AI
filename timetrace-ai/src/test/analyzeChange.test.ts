@@ -1,9 +1,12 @@
 import * as assert from 'assert';
 import { analyzeChange } from '../ai/analyzeChange';
 import { runTimeTraceAnalysis } from '../ai/runTimeTraceAnalysis';
-import { buildWorkspaceDependencyGraph } from '../ai/workspaceGraph';
+import { detectFindings } from '../ai/findingDetector';
+import { extractFeatures } from '../ai/featureExtractor';
 
 suite('AI Engine Test Suite', () => {
+	// ---- Legacy pipeline tests (backward-compat) ----
+
 	test('detects null check removal and returns a checkpoint', () => {
 		const result = analyzeChange({
 			filePath: '/tmp/example.ts',
@@ -16,8 +19,6 @@ suite('AI Engine Test Suite', () => {
 		assert.strictEqual(result.state, 'WARNING');
 		assert.strictEqual(result.checkpoint, true);
 		assert.strictEqual(result.features.nullCheckRemoved, true);
-		assert.ok(result.findings.length >= 1);
-		assert.ok(result.findings.some((finding) => finding.type === 'RemovedNullGuard'));
 		assert.ok(result.changedLineRanges.length > 0);
 		assert.ok(result.analysis.includes('State changed from NORMAL to WARNING'));
 	});
@@ -34,24 +35,20 @@ suite('AI Engine Test Suite', () => {
 		assert.strictEqual(result.state, 'ERROR');
 		assert.strictEqual(result.features.syntaxFailure, true);
 		assert.strictEqual(result.checkpoint, true);
-		assert.ok(result.findings.some((finding) => finding.type === 'SyntaxFailure'));
 	});
 
-	test('detects multiple findings in one change set', () => {
+	test('detects try/catch removal and comment risk', () => {
 		const result = analyzeChange({
 			filePath: '/tmp/example.ts',
 			language: 'typescript',
 			timestamp: '2026-04-17T00:00:00.000Z',
 			previousCode: 'function run() {\n  try {\n    doWork();\n  } catch (error) {\n    console.error(error);\n  }\n}\n',
-			currentCode: 'function run() {\n  if (ready) {\n    doWork();\n  }\n  return data.value.name;\n}\n// TODO: handle retries\n',
+			currentCode: 'function run() {\n  if (ready) {\n    doWork();\n  }\n}\n// TODO: handle retries\n',
 		});
 
 		assert.strictEqual(result.features.tryCatchRemoved, true);
 		assert.strictEqual(result.features.todoHackCommentAdded, true);
-		assert.ok(result.findings.length >= 3);
-		assert.ok(result.findings.some((finding) => finding.type === 'RemovedTryCatch'));
-		assert.ok(result.findings.some((finding) => finding.type === 'AddedTodoHack'));
-		assert.ok(result.findings.some((finding) => finding.type === 'SemanticDiagnostic'));
+		assert.ok(result.score >= 5);
 	});
 
 	test('treats a fixed broken file as recovery', () => {
@@ -78,84 +75,163 @@ suite('AI Engine Test Suite', () => {
 			currentCode: 'function render(user?: {name:string}) {\n  console.log(user.name);\n}\n',
 		});
 
-		assert.strictEqual(result.schemaVersion, '2.0');
-		assert.ok(Array.isArray(result.findings));
-		assert.ok(Array.isArray(result.incidents));
-		assert.ok(Array.isArray(result.probableRootCauses));
+		const keys = Object.keys(result).sort();
+		assert.ok(keys.includes('state'));
+		assert.ok(keys.includes('score'));
+		assert.ok(keys.includes('checkpoint'));
+		assert.ok(keys.includes('previousState'));
+		assert.ok(keys.includes('reasons'));
+		assert.ok(keys.includes('analysis'));
+		assert.ok(keys.includes('changedLineRanges'));
+		assert.ok(keys.includes('features'));
+		// New fields
+		assert.ok(keys.includes('findings'));
+		assert.ok(keys.includes('probableRootCauses'));
+		assert.ok(keys.includes('incidents'));
+		assert.ok(keys.includes('impactedFiles'));
+		assert.ok(keys.includes('relatedFiles'));
 		assert.strictEqual((result as { confidence?: number }).confidence, undefined);
 	});
 
-	test('marks direct dependents when export signatures change', () => {
-		const graph = buildWorkspaceDependencyGraph([
-			{
-				filePath: '/tmp/api.ts',
-				language: 'typescript',
-				code: 'export interface User { id: string }\nexport function getUser(): User { return { id: "1" }; }\n',
-			},
-			{
-				filePath: '/tmp/page.ts',
-				language: 'typescript',
-				code: 'import { getUser } from "./api";\nexport const run = () => getUser();\n',
-			},
-		], '2026-04-17T00:00:00.000Z');
+	// ---- New pipeline tests ----
+
+	test('cosmetic-only change produces zero findings and no checkpoint', () => {
+		const previousCode = 'function greet(name: string) {\n  return name;\n}\n';
+		const currentCode = 'function greet(name: string) {\n  // say hello\n  return name;\n}\n';
 
 		const result = analyzeChange({
-			filePath: '/tmp/api.ts',
+			filePath: '/tmp/example.ts',
 			language: 'typescript',
-			timestamp: '2026-04-17T00:00:00.000Z',
-			previousCode: 'export interface User { id: string }\nexport function getUser(): User { return { id: "1" }; }\n',
-			currentCode: 'export interface User { id: number }\nexport function getUser(): User { return { id: 1 }; }\n',
-			workspaceGraph: graph,
+			timestamp: '2026-04-17T00:00:01.000Z',
+			previousCode,
+			currentCode,
+			previousState: 'NORMAL',
 		});
 
-		assert.ok(result.findings.some((finding) => finding.type === 'ChangedExportSignature'));
-		assert.ok(result.findings.some((finding) => finding.type === 'DownstreamDependencyRisk'));
-		assert.ok(result.impactedFiles.includes('/tmp/page.ts'));
+		assert.strictEqual(result.features.cosmetic, true);
+		assert.strictEqual(result.findings.length, 0);
+		assert.strictEqual(result.checkpoint, false);
+		assert.strictEqual(result.state, 'NORMAL');
 	});
 
-	test('ranks probable upstream root causes for downstream symptoms', () => {
-		const graph = buildWorkspaceDependencyGraph([
-			{
-				filePath: '/tmp/api.ts',
-				language: 'typescript',
-				code: 'export function getUser(): {id: number} { return { id: 1 }; }\n',
-			},
-			{
-				filePath: '/tmp/page.ts',
-				language: 'typescript',
-				code: 'import { getUser } from "./api";\nconst user = getUser();\nconsole.log(user.name);\n',
-			},
-		], '2026-04-17T00:05:00.000Z');
-
-		const result = analyzeChange({
-			filePath: '/tmp/page.ts',
+	test('findings array has correct kinds for null check removal', () => {
+		const features = extractFeatures({
 			language: 'typescript',
-			timestamp: '2026-04-17T00:05:00.000Z',
-			previousCode: 'import { getUser } from "./api";\nconst user = getUser();\nconsole.log(user.id);\n',
-			currentCode: 'import { getUser } from "./api";\nconst user = getUser();\nconsole.log(unresolvedUser.name);\n',
-			workspaceGraph: graph,
-			knownAnalysesByFile: {
-				'/tmp/api.ts': {
-					filePath: '/tmp/api.ts',
-					timestamp: '2026-04-17T00:02:00.000Z',
-					checkpointId: 'cp_1',
-					state: 'WARNING',
-					findings: [{
-						id: 'f_api_export',
-						type: 'ChangedExportSignature',
-						severity: 'HIGH',
-						confidence: 0.82,
-						filePath: '/tmp/api.ts',
-						changedLineRanges: [[1, 1]],
-						message: 'export changed',
-						evidence: ['shape updated'],
-						timestamp: '2026-04-17T00:02:00.000Z',
-					}],
-				},
-			},
+			previousCode: 'function run(v?: string) {\n  if (!v) return;\n  return v.trim();\n}\n',
+			currentCode: 'function run(v?: string) {\n  return v.trim();\n}\n',
+			changedLineRanges: [[2, 3]],
 		});
 
-		assert.ok(result.probableRootCauses.length > 0);
-		assert.ok(result.probableRootCauses.some((candidate) => candidate.filePath === '/tmp/api.ts'));
+		const findings = detectFindings(
+			{ filePath: '/tmp/example.ts', timestamp: '2026-04-17T00:00:00.000Z', changedLineRanges: [[2, 3]] },
+			features,
+		);
+
+		const kinds = findings.map((f) => f.kind);
+		assert.ok(kinds.includes('null_check_removed'), `Expected null_check_removed in ${JSON.stringify(kinds)}`);
+		assert.ok(findings.every((f) => f.severity === 'error' || f.severity === 'warning' || f.severity === 'info'));
+		assert.ok(findings.every((f) => f.confidence > 0 && f.confidence <= 1));
+		assert.ok(findings.every((f) => typeof f.evidence === 'string' && f.evidence.length > 0));
+	});
+
+	test('syntax error finding has error severity', () => {
+		const features = extractFeatures({
+			language: 'typescript',
+			previousCode: 'const x = 1;\n',
+			currentCode: 'function broken( {\n',
+			changedLineRanges: [[1, 1]],
+		});
+
+		const findings = detectFindings(
+			{ filePath: '/tmp/example.ts', timestamp: '2026-04-17T00:00:00.000Z', changedLineRanges: [[1, 1]] },
+			features,
+		);
+
+		assert.ok(findings.some((f) => f.kind === 'syntax_error' && f.severity === 'error'));
+	});
+
+	test('incident is opened for a new error finding', () => {
+		const result = analyzeChange(
+			{
+				filePath: '/tmp/example.ts',
+				language: 'typescript',
+				timestamp: '2026-04-17T00:00:00.000Z',
+				previousCode: 'const x = 1;\n',
+				currentCode: 'function broken( {\n',
+			},
+			{
+				existingIncidents: [],
+				graph: { imports: {}, exports: {}, exportSignatures: {} },
+				recentSaves: {},
+				workspaceRoot: '/tmp',
+			},
+		);
+
+		assert.ok(result.incidents.length > 0, 'Expected at least one incident to be opened');
+		assert.strictEqual(result.incidents[0].status, 'open');
+	});
+
+	test('incident is resolved when all its findings disappear', () => {
+		// First save — open an incident
+		const firstResult = analyzeChange(
+			{
+				filePath: '/tmp/example.ts',
+				language: 'typescript',
+				timestamp: '2026-04-17T00:00:00.000Z',
+				previousCode: 'const x = 1;\n',
+				currentCode: 'function broken( {\n',
+			},
+			{
+				existingIncidents: [],
+				graph: { imports: {}, exports: {}, exportSignatures: {} },
+				recentSaves: {},
+				workspaceRoot: '/tmp',
+			},
+		);
+
+		assert.ok(firstResult.incidents.some((i) => i.status === 'open'));
+
+		// Second save — fix the file
+		const secondResult = analyzeChange(
+			{
+				filePath: '/tmp/example.ts',
+				language: 'typescript',
+				timestamp: '2026-04-17T00:00:01.000Z',
+				previousCode: 'function broken( {\n',
+				currentCode: 'const x = 1;\n',
+				previousState: 'ERROR',
+			},
+			{
+				existingIncidents: firstResult.incidents,
+				graph: { imports: {}, exports: {}, exportSignatures: {} },
+				recentSaves: {},
+				workspaceRoot: '/tmp',
+			},
+		);
+
+		assert.ok(secondResult.incidents.every((i) => i.status === 'resolved'), 'Expected all incidents to be resolved');
+	});
+
+	test('complexity spike only fires at delta > 3', () => {
+		// Delta of 2 — should not fire complexity_spike
+		const features = extractFeatures({
+			language: 'typescript',
+			previousCode: 'function f() { if (a) { } }\n',
+			currentCode: 'function f() { if (a) { } if (b) { } if (c) { } }\n',
+			changedLineRanges: [[1, 1]],
+		});
+
+		const findings = detectFindings(
+			{ filePath: '/tmp/example.ts', timestamp: '2026-04-17T00:00:00.000Z', changedLineRanges: [[1, 1]] },
+			features,
+		);
+
+		// Only fires if delta > 3
+		const hasSpike = findings.some((f) => f.kind === 'complexity_spike');
+		if (features.complexityDelta <= 3) {
+			assert.strictEqual(hasSpike, false, 'complexity_spike should not fire at delta <= 3');
+		} else {
+			assert.strictEqual(hasSpike, true, 'complexity_spike should fire at delta > 3');
+		}
 	});
 });

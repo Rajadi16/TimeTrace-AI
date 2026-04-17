@@ -1,89 +1,76 @@
 export type AnalysisState = 'NORMAL' | 'WARNING' | 'ERROR';
 
-export type FindingType =
-	| 'SyntaxFailure'
-	| 'SemanticDiagnostic'
-	| 'RemovedNullGuard'
-	| 'RemovedOptionalChaining'
-	| 'RemovedFallback'
-	| 'RemovedTryCatch'
-	| 'IncreasedNesting'
-	| 'AddedLoopRisk'
-	| 'AddedTodoHack'
-	| 'ChangedExportSignature'
-	| 'DownstreamDependencyRisk';
+// ---------------------------------------------------------------------------
+// Finding — one discrete issue detected in a single file save
+// ---------------------------------------------------------------------------
 
-export type FindingSeverity = 'LOW' | 'MEDIUM' | 'HIGH';
+export type FindingKind =
+	| 'syntax_error'
+	| 'undefined_identifier'
+	| 'null_check_removed'
+	| 'try_catch_removed'
+	| 'heavy_loop_added'
+	| 'complexity_spike'
+	| 'todo_hack_comment'
+	| 'export_signature_changed'
+	| 'downstream_impact';
+
+export type FindingSeverity = 'error' | 'warning' | 'info';
 
 export interface Finding {
+	/** Deterministic id: `${kind}:${filePath}:${lineRange?.[0] ?? 0}` */
 	id: string;
-	type: FindingType;
+	kind: FindingKind;
 	severity: FindingSeverity;
-	confidence: number;
-	filePath: string;
-	changedLineRanges: number[][];
 	message: string;
-	evidence: string[];
+	/** Human-readable explanation of why this finding was raised */
+	evidence: string;
+	/** 0..1 confidence that this is a real issue */
+	confidence: number;
+	lineRange?: [number, number];
+	/** Exported name / function / variable most related to this finding */
 	relatedSymbol?: string;
+	filePath: string;
 	timestamp: string;
 }
 
+// ---------------------------------------------------------------------------
+// Incident — a persistent issue that spans multiple saves
+// ---------------------------------------------------------------------------
+
 export type IncidentStatus = 'open' | 'mitigated' | 'resolved';
+
+export interface Incident {
+	id: string;
+	status: IncidentStatus;
+	title: string;
+	openedAt: string;
+	updatedAt: string;
+	resolvedAt?: string;
+	/** Finding ids that are currently supporting this incident */
+	findings: string[];
+	/** Files that may be affected by this incident */
+	impactedFiles: string[];
+	/** Files contextually tied to this analysis/incident */
+	relatedFiles: string[];
+}
+
+// ---------------------------------------------------------------------------
+// RootCauseCandidate — ranked, not certain
+// ---------------------------------------------------------------------------
 
 export interface RootCauseCandidate {
 	filePath: string;
 	relatedSymbol?: string;
-	reason: string;
+	/** 0..1 normalized confidence */
 	confidence: number;
-	supportingFindingIds: string[];
+	/** Transparent signals driving the ranking */
+	signals: string[];
 }
 
-export interface IncidentTimelineEvent {
-	timestamp: string;
-	filePath: string;
-	checkpointId: string;
-	state: AnalysisState;
-	linkedFindingIds: string[];
-	note: string;
-}
-
-export interface Incident {
-	incidentId: string;
-	status: IncidentStatus;
-	surfacedFile: string;
-	surfacedCheckpointId: string;
-	linkedFindingIds: string[];
-	probableRootCauses: RootCauseCandidate[];
-	relatedFiles: string[];
-	timelineTrail: IncidentTimelineEvent[];
-	summary: string;
-}
-
-export interface WorkspaceDependencyNode {
-	filePath: string;
-	imports: string[];
-	exports: string[];
-	directDependents: string[];
-}
-
-export interface WorkspaceDependencyGraph {
-	generatedAt: string;
-	files: Record<string, WorkspaceDependencyNode>;
-}
-
-export interface HistoricalAnalysisSummary {
-	filePath: string;
-	timestamp: string;
-	checkpointId: string;
-	state: AnalysisState;
-	findings: Finding[];
-}
-
-export interface WorkspaceFileSnapshot {
-	filePath: string;
-	language: string;
-	code: string;
-}
+// ---------------------------------------------------------------------------
+// Feature extraction types (extended)
+// ---------------------------------------------------------------------------
 
 export interface AnalyzeChangeInput {
 	filePath: string;
@@ -93,26 +80,27 @@ export interface AnalyzeChangeInput {
 	currentCode: string;
 	changedLineRanges?: number[][];
 	previousState?: AnalysisState;
-	workspaceGraph?: WorkspaceDependencyGraph;
-	knownAnalysesByFile?: Record<string, HistoricalAnalysisSummary>;
 }
 
 export interface FeatureSet {
 	syntaxFailure: boolean;
 	undefinedIdentifierDetected: boolean;
 	nullCheckRemoved: boolean;
-	optionalChainingRemoved: boolean;
-	fallbackRemoved: boolean;
 	tryCatchRemoved: boolean;
 	heavyLoopAdded: boolean;
 	complexityDelta: number;
 	todoHackCommentAdded: boolean;
-	exportSignatureChanged: boolean;
+	/** True when all changes are whitespace / comment only — suppress checkpoint noise */
+	cosmetic: boolean;
+	/** AST-extracted names that appeared in changed line ranges */
+	changedSymbols: string[];
+	/** Exported names whose signature changed between previous and current code */
+	exportedNamesChanged: string[];
+	/** Line ranges attributed to specific feature flags */
+	featureLineRanges: Partial<Record<FindingKind, [number, number]>>;
 	currentMetrics: {
 		complexity: number;
 		guardCount: number;
-		optionalChainCount: number;
-		fallbackCount: number;
 		tryCatchCount: number;
 		loopCount: number;
 		todoCommentCount: number;
@@ -120,17 +108,13 @@ export interface FeatureSet {
 	previousMetrics: {
 		complexity: number;
 		guardCount: number;
-		optionalChainCount: number;
-		fallbackCount: number;
 		tryCatchCount: number;
 		loopCount: number;
 		todoCommentCount: number;
- 	};
+	};
 }
 
 export interface AnalyzeChangeOutput {
-	schemaVersion: '2.0';
-	checkpointId: string;
 	state: AnalysisState;
 	score: number;
 	confidence?: number;
@@ -141,7 +125,8 @@ export interface AnalyzeChangeOutput {
 	features: FeatureSet;
 	changedLineRanges: number[][];
 	findings: Finding[];
+	probableRootCauses: RootCauseCandidate[];
+	incidents: Incident[];
 	impactedFiles: string[];
 	relatedFiles: string[];
-	probableRootCauses: RootCauseCandidate[];
 }

@@ -1,129 +1,212 @@
 import * as vscode from 'vscode';
 import { runTimeTraceAnalysis } from './ai/runTimeTraceAnalysis';
-import { SnapshotStore } from './ai/snapshotStore';
-import { buildWorkspaceDependencyGraph } from './ai/workspaceGraph';
-import type { WorkspaceFileSnapshot } from './ai/types';
+import {
+	SnapshotStore,
+	type CodePreviewRecord,
+	type TimelineCheckpointRecord,
+} from './ai/snapshotStore';
+import { emptyGraph, updateGraphForFile } from './ai/dependencyGraph';
+import type { TimeTraceAnalysisResult } from './ai';
+
+interface SidebarTimelinePayload {
+	filePath: string;
+	timelineHistory: TimelineCheckpointRecord[];
+}
+
+function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): CodePreviewRecord {
+	const previousLines = previousCode.split(/\r?\n/);
+	const currentLines = currentCode.split(/\r?\n/);
+	const firstRange = changedLineRanges[0] ?? [1, 1];
+	const startLine = Math.max(1, firstRange[0]);
+	const endLine = Math.max(startLine, firstRange[1]);
+	const previewStart = Math.max(1, startLine - 2);
+	const previewEnd = endLine + 2;
+
+	return {
+		before: previousLines.slice(previewStart - 1, previewEnd),
+		after: currentLines.slice(previewStart - 1, previewEnd),
+		focusLine: Math.max(1, startLine - previewStart + 1),
+	};
+}
+
+function buildTimelineCheckpointRecord(
+	filePath: string,
+	timestamp: string,
+	result: TimeTraceAnalysisResult,
+	codePreview: CodePreviewRecord,
+): TimelineCheckpointRecord {
+	return {
+		filePath,
+		timestamp,
+		state: result.state,
+		score: result.score,
+		checkpoint: result.checkpoint,
+		previousState: result.previousState,
+		reasons: result.reasons,
+		analysis: result.analysis,
+		changedLineRanges: result.changedLineRanges,
+		features: result.features,
+		codePreview,
+		findings: result.findings,
+		probableRootCauses: result.probableRootCauses,
+		incidents: result.incidents,
+		impactedFiles: result.impactedFiles,
+		relatedFiles: result.relatedFiles,
+	};
+}
 
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
-	const snapshotStore = new SnapshotStore(context.globalState);
+	const snapshotStore = new SnapshotStore(context.workspaceState);
+	const provider = new TimeTraceSidebarProvider(context.extensionUri);
 
-	async function collectWorkspaceFiles(activeDocument: vscode.TextDocument): Promise<WorkspaceFileSnapshot[]> {
-		const uriSet = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', '**/{node_modules,out,dist,.git}/**', 300);
-		const snapshots: WorkspaceFileSnapshot[] = [];
+	// Determine workspace root for import resolution
+	const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
-		for (const uri of uriSet) {
-			try {
-				const bytes = await vscode.workspace.fs.readFile(uri);
-				const code = Buffer.from(bytes).toString('utf8');
-				snapshots.push({
-					filePath: uri.fsPath,
-					language: uri.fsPath.endsWith('.tsx') ? 'typescriptreact' : uri.fsPath.endsWith('.ts') ? 'typescript' : uri.fsPath.endsWith('.jsx') ? 'javascriptreact' : 'javascript',
-					code,
-				});
-			} catch {
-				// Ignore unreadable files to keep analysis responsive.
-			}
-		}
-
-		const activeIndex = snapshots.findIndex((file) => file.filePath === activeDocument.uri.fsPath);
-		const activeSnapshot: WorkspaceFileSnapshot = {
-			filePath: activeDocument.uri.fsPath,
-			language: activeDocument.languageId,
-			code: activeDocument.getText(),
-		};
-
-		if (activeIndex >= 0) {
-			snapshots[activeIndex] = activeSnapshot;
-		} else {
-			snapshots.push(activeSnapshot);
-		}
-
-		return snapshots;
+	function publishTimelineForFile(filePath: string): void {
+		provider.publishTimeline({
+			filePath,
+			timelineHistory: snapshotStore.getTimelineHistory(filePath),
+		});
 	}
 
-	async function analyzeDocument(document: vscode.TextDocument) {
+	function syncSidebarForDocument(document?: vscode.TextDocument): void {
+		if (!document || document.isUntitled || document.uri.scheme !== 'file') {
+			provider.publishTimeline({
+				filePath: '',
+				timelineHistory: [],
+			});
+			return;
+		}
+
+		publishTimelineForFile(document.uri.fsPath);
+	}
+
+	function analyzeDocument(document: vscode.TextDocument) {
 		if (document.isUntitled || document.uri.scheme !== 'file') {
 			return undefined;
 		}
 
+		const timestamp = new Date().toISOString();
 		const previousSnapshot = snapshotStore.getSnapshot(document.uri.fsPath);
 		const currentCode = document.getText();
 
 		if (!previousSnapshot) {
+			// First save — update graph, store baseline snapshot
+			const graph = updateGraphForFile(
+				snapshotStore.getWorkspaceGraph() ?? emptyGraph(),
+				document.uri.fsPath,
+				currentCode,
+				workspaceRoot,
+			);
+			snapshotStore.saveWorkspaceGraph(graph);
 			snapshotStore.saveSnapshot({
 				filePath: document.uri.fsPath,
 				language: document.languageId,
-				timestamp: new Date().toISOString(),
+				timestamp,
 				code: currentCode,
 			});
 			outputChannel.appendLine(`[baseline] Stored snapshot for ${document.uri.fsPath}`);
+			publishTimelineForFile(document.uri.fsPath);
 			return undefined;
 		}
 
-		const result = runTimeTraceAnalysis({
-			filePath: document.uri.fsPath,
-			language: document.languageId,
-			timestamp: new Date().toISOString(),
-			previousCode: previousSnapshot.code,
+		// Update graph for this file
+		const graph = updateGraphForFile(
+			snapshotStore.getWorkspaceGraph() ?? emptyGraph(),
+			document.uri.fsPath,
 			currentCode,
-			previousState: previousSnapshot.state,
-			workspaceGraph: buildWorkspaceDependencyGraph(await collectWorkspaceFiles(document), new Date().toISOString()),
-			knownAnalysesByFile: snapshotStore.getAllLatestAnalyses(),
-			existingIncidents: snapshotStore.getIncidents(),
-		});
+			workspaceRoot,
+		);
+		snapshotStore.saveWorkspaceGraph(graph);
 
+		// Run the full 6-step analysis pipeline
+		const result = runTimeTraceAnalysis(
+			{
+				filePath: document.uri.fsPath,
+				language: document.languageId,
+				timestamp,
+				previousCode: previousSnapshot.code,
+				currentCode,
+				previousState: previousSnapshot.state,
+			},
+			{
+				existingIncidents: snapshotStore.getIncidents(),
+				graph,
+				recentSaves: snapshotStore.getRecentSaves(),
+				workspaceRoot,
+			},
+		);
+
+		const codePreview = buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges);
+
+		// Persist
 		snapshotStore.saveSnapshot({
 			filePath: document.uri.fsPath,
 			language: document.languageId,
-			timestamp: new Date().toISOString(),
+			timestamp,
 			code: currentCode,
 			state: result.state,
 		});
 		snapshotStore.saveLatestAnalysis({
 			filePath: document.uri.fsPath,
-			timestamp: new Date().toISOString(),
+			timestamp,
 			result,
+			findings: result.findings,
 		});
 		snapshotStore.saveIncidents(result.incidents);
 
 		if (result.checkpoint) {
-			snapshotStore.appendCheckpoint({
-				checkpointId: result.checkpointId,
-				filePath: document.uri.fsPath,
-				timestamp: new Date().toISOString(),
-				state: result.state,
-				summary: result.analysis,
-				findingIds: result.findings.map((finding) => finding.id),
-				relatedFiles: result.relatedFiles,
-			});
+			snapshotStore.saveTimelineCheckpoint(
+				buildTimelineCheckpointRecord(document.uri.fsPath, timestamp, result, codePreview),
+			);
 		}
 
+		// Output channel logging
 		outputChannel.appendLine(JSON.stringify(result, null, 2));
-		vscode.window.setStatusBarMessage(`TimeTrace AI: ${result.state} (${result.score})`, 4000);
+
+		// Status bar — use first high-severity finding message if present
+		const topFinding = result.findings.find((f) => f.severity === 'error') ?? result.findings.find((f) => f.severity === 'warning');
+		const statusMsg = topFinding
+			? `TimeTrace AI [${result.state}]: ${topFinding.message}`
+			: `TimeTrace AI: ${result.state} (${result.score})`;
+		vscode.window.setStatusBarMessage(statusMsg, 4000);
+
+		publishTimelineForFile(document.uri.fsPath);
+
 		if (result.checkpoint) {
+			outputChannel.appendLine(
+				`[checkpoint] ${document.uri.fsPath} ${result.previousState} -> ${result.state}`,
+			);
 			void vscode.window.showInformationMessage(`TimeTrace AI checkpoint: ${result.analysis}`);
 		}
+
 		return result;
 	}
 
 	context.subscriptions.push(outputChannel);
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(TimeTraceSidebarProvider.viewType, provider),
+		vscode.commands.registerCommand('timetrace-ai.openSidebar', async () => {
+			await vscode.commands.executeCommand('workbench.view.extension.timetraceAi');
+			await vscode.commands.executeCommand('timetraceAi.sidebar.focus');
+		}),
+	);
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
-		void analyzeDocument(document);
+		analyzeDocument(document);
+	}));
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
+		syncSidebarForDocument(editor?.document);
 	}));
 
-	const helloWorldCommand = vscode.commands.registerCommand('timetrace-ai.helloWorld', () => {
-		void vscode.window.showInformationMessage('Hello World from timetrace-ai!');
-	});
-
-	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', async () => {
+	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', () => {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			void vscode.window.showWarningMessage('Open a file first to analyze it.');
 			return;
 		}
 
-		const result = await analyzeDocument(editor.document);
+		const result = analyzeDocument(editor.document);
 		if (!result) {
 			void vscode.window.showInformationMessage('Baseline snapshot captured. Edit and save the file again to trigger analysis.');
 			return;
@@ -150,9 +233,250 @@ export function activate(context: vscode.ExtensionContext) {
 		void vscode.window.showInformationMessage(`Latest TimeTrace AI result for ${editor.document.fileName} is available in the output channel.`);
 	});
 
-	context.subscriptions.push(helloWorldCommand, analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
-	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate a checkpoint.');
+	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
+	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
+	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
 	console.log('TimeTrace AI extension activated.');
 }
 
 export function deactivate() {}
+
+class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
+	public static readonly viewType = 'timetraceAi.sidebar';
+	private webviewView: vscode.WebviewView | undefined;
+	private lastMessage:
+		| {
+				type: 'historyUpdate';
+				payload: SidebarTimelinePayload;
+		  }
+		| undefined;
+
+	public constructor(private readonly extensionUri: vscode.Uri) {}
+
+	public publishTimeline(payload: SidebarTimelinePayload): void {
+		this.lastMessage = {
+			type: 'historyUpdate',
+			payload,
+		};
+		this.postLastMessage();
+	}
+
+	public resolveWebviewView(webviewView: vscode.WebviewView): void {
+		this.webviewView = webviewView;
+		const webview = webviewView.webview;
+		webview.options = {
+			enableScripts: true,
+			localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')],
+		};
+
+		webview.html = this.getHtml(webview);
+		this.postLastMessage();
+
+		webview.onDidReceiveMessage((message: { type?: string }) => {
+			if (message.type === 'jumpToRootCause') {
+				void vscode.window.showInformationMessage('Focused root-cause evidence for the selected failure state.');
+			}
+		});
+	}
+
+	private postLastMessage(): void {
+		if (!this.webviewView || !this.lastMessage) {
+			return;
+		}
+
+		void this.webviewView.webview.postMessage(this.lastMessage);
+	}
+
+	private getHtml(webview: vscode.Webview): string {
+		const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'sidebar.css'));
+		const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, 'media', 'sidebar.js'));
+		const nonce = getNonce();
+
+		return `<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+	<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource}; script-src 'nonce-${nonce}';" />
+	<title>TimeTrace AI</title>
+	<link rel="stylesheet" href="${styleUri}" />
+</head>
+<body class="theme-auto">
+	<div class="aurora"></div>
+	<main class="panel" role="application" aria-label="TimeTrace AI Sidebar">
+		<header class="header reveal">
+			<div class="header-beam"></div>
+			<div class="header-topline">
+				<div>
+					<h1>TimeTrace AI</h1>
+					<p>Rewind. Analyze. Fix.</p>
+				</div>
+				<span class="header-pill" id="header-state-pill">NORMAL</span>
+			</div>
+			<div class="header-meta">
+				<div class="header-meta-item">
+					<span>File</span>
+					<strong id="header-file">Demo mode</strong>
+				</div>
+				<div class="header-meta-item">
+					<span>Checkpoint</span>
+					<strong id="header-checkpoint">-</strong>
+				</div>
+				<div class="header-meta-item">
+					<span>Score</span>
+					<strong id="header-score">-</strong>
+				</div>
+			</div>
+			<div class="header-underline"></div>
+		</header>
+
+		<nav class="pane-switch reveal" aria-label="Sidebar sections">
+			<button class="pane-btn active" data-pane-target="overview" type="button">Overview</button>
+			<button class="pane-btn" data-pane-target="code" type="button">Code</button>
+			<button class="pane-btn" data-pane-target="insights" type="button">Insights</button>
+		</nav>
+
+		<section class="section hero reveal" id="timeline-section" data-pane="overview">
+			<div class="timeline-topline">
+				<div class="section-label">Incident Timeline</div>
+				<div class="timeline-meta">
+					<span id="timeline-source">Demo mode</span>
+					<span id="timeline-count"></span>
+				</div>
+			</div>
+			<div class="scenario-row" id="scenario-row">
+				<label for="scenario-select">Scenario</label>
+				<select id="scenario-select" aria-label="Select debugging scenario"></select>
+			</div>
+			<div class="timeline-empty hidden" id="timeline-empty">Waiting for checkpoint history.</div>
+
+			<div class="timeline-wrap" id="timeline-wrap">
+				<div class="timeline-inner" id="timeline-inner">
+					<div class="timeline-track" id="timeline-track"></div>
+					<div class="timeline-progress" id="timeline-progress"></div>
+					<div class="timeline-nodes" id="timeline-nodes"></div>
+				</div>
+			</div>
+			<div class="timeline-stamps" id="timeline-stamps" aria-label="Checkpoint timestamps"></div>
+
+			<div class="timeline-actions">
+				<button class="icon-btn" id="timeline-play-pause" type="button" aria-label="Play timeline" title="Play / Pause">
+					<span id="timeline-play-pause-icon">&#9654;</span>
+				</button>
+				<button class="icon-btn" id="timeline-rewind" type="button" aria-label="Rewind timeline" title="Rewind">
+					<span>&#8630;</span>
+				</button>
+			</div>
+			<div class="playback-row">
+				<label for="replay-speed">Replay Speed</label>
+				<select id="replay-speed" aria-label="Replay speed selector">
+					<option value="slow">Cinematic</option>
+					<option value="normal" selected>Balanced</option>
+					<option value="fast">Rapid</option>
+				</select>
+			</div>
+		</section>
+
+		<section class="card glass reveal" id="error-card" data-pane="overview">
+			<div class="card-title">Checkpoint Detail</div>
+			<div class="metrics checkpoint-metrics">
+				<div><span>State</span><strong id="checkpoint-state"></strong></div>
+				<div><span>Score</span><strong id="checkpoint-score"></strong></div>
+				<div><span>Transition</span><strong id="checkpoint-transition"></strong></div>
+				<div><span>Checkpoint</span><strong id="checkpoint-marker"></strong></div>
+			</div>
+			<p class="checkpoint-summary" id="checkpoint-summary"></p>
+			<p class="checkpoint-timestamp" id="checkpoint-timestamp"></p>
+		</section>
+
+		<section class="card telemetry-card reveal" id="latency-card" data-pane="insights">
+			<div class="card-title">Checkpoint Signal</div>
+			<div class="sparkline-wrap">
+				<svg class="sparkline" id="sparkline" viewBox="0 0 180 54" preserveAspectRatio="none" aria-label="Checkpoint signal sparkline">
+					<path id="sparkline-path" class="sparkline-path"></path>
+					<circle id="sparkline-dot" class="sparkline-dot" r="3"></circle>
+				</svg>
+			</div>
+			<div class="sparkline-meta">
+				<span>Current</span>
+				<strong id="latency-value"></strong>
+			</div>
+		</section>
+
+		<section class="card root-cause reveal hidden" id="root-cause-card" data-pane="insights">
+			<div class="card-title">Root-Cause Candidates</div>
+			<div class="ranking-list" id="root-cause-list"></div>
+		</section>
+
+		<section class="card code-card reveal" id="code-card" data-pane="code">
+			<div class="card-title">Relevant Code Segment</div>
+			<p class="card-subtitle">Only impacted lines are shown</p>
+			<div class="code-impact" id="changed-lines"></div>
+			<div class="code-toggle" role="tablist" aria-label="Before and after code states">
+				<button class="toggle-btn active" id="before-tab" data-state="before" type="button">Before</button>
+				<button class="toggle-btn" id="after-tab" data-state="after" type="button">After</button>
+			</div>
+			<pre class="code-window" id="code-window" aria-live="polite"></pre>
+		</section>
+
+		<section class="card flow-card reveal" id="impact-flow-card" data-pane="insights">
+			<div class="card-title">Findings</div>
+			<div class="findings-list" id="findings-list"></div>
+		</section>
+
+		<section class="card analysis-card reveal" id="analysis-card" data-pane="insights">
+			<div class="card-title">Incidents and Cross-File Context</div>
+			<div class="incident-list" id="incident-list"></div>
+			<div class="file-context-grid">
+				<div>
+					<div class="mini-title">Related Files</div>
+					<div class="context-list" id="related-files-list"></div>
+				</div>
+				<div>
+					<div class="mini-title">Impacted Files</div>
+					<div class="context-list" id="impacted-files-list"></div>
+				</div>
+			</div>
+			<div class="compat-block">
+				<div class="mini-title">Compatibility Summary</div>
+				<p id="analysis-summary"></p>
+			</div>
+		</section>
+
+		<section class="card control-card reveal">
+			<div class="card-title">Controls</div>
+			<div class="control-grid">
+				<button class="btn" id="jump-root" type="button">Jump to Root Cause</button>
+				<button class="btn btn-secondary" id="replay" type="button">Replay</button>
+				<button class="btn btn-tertiary" id="previous" type="button">Previous</button>
+				<button class="btn btn-tertiary" id="next" type="button">Next</button>
+			</div>
+			<div class="footer-row">
+				<span>Theme</span>
+				<button class="theme-toggle" id="theme-toggle" type="button">Auto</button>
+			</div>
+			<div class="footer-row">
+				<span>Typography</span>
+				<button class="theme-toggle" id="font-toggle" type="button">Mono</button>
+			</div>
+			<p class="hint">Shortcuts: ← / → navigate timeline, Space replay</p>
+		</section>
+	</main>
+
+	<script nonce="${nonce}">
+		window.__timetraceApi = acquireVsCodeApi();
+	</script>
+	<script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+	}
+}
+
+function getNonce(): string {
+	const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+	let nonce = '';
+	for (let i = 0; i < 32; i += 1) {
+		nonce += chars.charAt(Math.floor(Math.random() * chars.length));
+	}
+	return nonce;
+}
