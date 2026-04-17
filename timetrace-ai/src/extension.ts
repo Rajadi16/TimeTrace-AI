@@ -1,11 +1,18 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs';
+import * as path from 'path';
 import { runTimeTraceAnalysis } from './ai/runTimeTraceAnalysis';
 import {
 	SnapshotStore,
 	type CodePreviewRecord,
 	type TimelineCheckpointRecord,
 } from './ai/snapshotStore';
-import { emptyGraph, updateGraphForFile, type WorkspaceGraph } from './ai/dependencyGraph';
+import {
+	emptyGraph,
+	updateGraphForFile,
+	computeDirectDownstream,
+	type WorkspaceGraph,
+} from './ai/dependencyGraph';
 import type { TimeTraceAnalysisResult } from './ai';
 import { RuntimeStore } from './ai/runtimeStore';
 import { ingestRuntimeEvent } from './ai/runtimeIngestion';
@@ -20,7 +27,52 @@ interface SidebarTimelinePayload {
 
 interface SidebarAnalysisPayload extends TimeTraceAnalysisResult {
 	filePath: string;
+	codePane?: CodePanePayload;
 }
+
+interface CodePaneSnippet {
+	startLine: number;
+	focusLine: number;
+	lines: string[];
+}
+
+interface CodePaneFlowNode {
+	id: string;
+	label: string;
+	role: string;
+	kind: 'current' | 'import' | 'downstream' | 'related';
+}
+
+interface CodePaneFlowEdge {
+	from: string;
+	to: string;
+	label?: string;
+}
+
+interface CodePaneFlow {
+	title: string;
+	summary: string;
+	nodes: CodePaneFlowNode[];
+	edges: CodePaneFlowEdge[];
+}
+
+interface CodePanePayload {
+	currentFile: string;
+	beforeSnippet: CodePaneSnippet;
+	afterSnippet: CodePaneSnippet;
+	findingLocations: Array<{ id: string; message: string; filePath: string; line?: number; severity: string }>;
+	runtimeLocations: Array<{ id: string; message: string; eventType: string; filePath: string; line?: number; column?: number }>;
+	rootCauseFiles: string[];
+	relatedFiles: string[];
+	impactedFiles: string[];
+	flow: CodePaneFlow;
+}
+
+type WebviewMessage =
+	| { type?: 'jumpToRootCause' }
+	| { type?: 'openLocation'; payload?: { filePath?: string; line?: number; column?: number } }
+	| { type?: 'openFile'; payload?: { filePath?: string } }
+	| { type?: 'goToLine'; payload?: { filePath?: string; line?: number } };
 
 function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): CodePreviewRecord {
 	const previousLines = previousCode.split(/\r?\n/);
@@ -35,6 +87,235 @@ function buildCodePreview(previousCode: string, currentCode: string, changedLine
 		before: previousLines.slice(previewStart - 1, previewEnd),
 		after: currentLines.slice(previewStart - 1, previewEnd),
 		focusLine: Math.max(1, startLine - previewStart + 1),
+		startLine: previewStart,
+		endLine: previewEnd,
+	};
+}
+
+function normalizeAbsolutePath(filePath: string, workspaceRoot: string): string {
+	if (!filePath) {
+		return '';
+	}
+	if (path.isAbsolute(filePath)) {
+		return path.normalize(filePath);
+	}
+	if (!workspaceRoot) {
+		return path.normalize(filePath);
+	}
+	return path.normalize(path.resolve(workspaceRoot, filePath));
+}
+
+function toWorkspaceRelative(filePath: string, workspaceRoot: string): string {
+	if (!filePath) {
+		return '';
+	}
+	const absolute = normalizeAbsolutePath(filePath, workspaceRoot);
+	if (!workspaceRoot || !absolute.startsWith(workspaceRoot)) {
+		return absolute;
+	}
+	const relative = path.relative(workspaceRoot, absolute);
+	return relative || path.basename(absolute);
+}
+
+function classifyArchitectureRole(filePath: string): string {
+	const value = filePath.toLowerCase();
+	if (/route|router|endpoint/.test(value)) { return 'Route'; }
+	if (/controller|handler/.test(value)) { return 'Handler'; }
+	if (/service|manager|provider/.test(value)) { return 'Service'; }
+	if (/repo|repository|dao/.test(value)) { return 'Repository'; }
+	if (/cache|redis/.test(value)) { return 'Cache'; }
+	if (/db|database|postgres|mongo|prisma|sql/.test(value)) { return 'Database'; }
+	if (/api|client|fetch|axios/.test(value)) { return 'API Client'; }
+	if (/worker|job|queue/.test(value)) { return 'Worker'; }
+	if (/auth|middleware/.test(value)) { return 'Middleware'; }
+	if (/component|view|screen|ui/.test(value)) { return 'Component'; }
+	return 'Module';
+}
+
+function inferCodeFlow(
+	filePath: string,
+	workspaceRoot: string,
+	graph: WorkspaceGraph,
+	result: TimeTraceAnalysisResult,
+): CodePaneFlow {
+	const absoluteCurrent = normalizeAbsolutePath(filePath, workspaceRoot);
+	const imports = graph.imports[absoluteCurrent] ?? [];
+	const downstream = computeDirectDownstream(graph, absoluteCurrent);
+	const related = [...result.relatedFiles, ...result.impactedFiles]
+		.map((item) => normalizeAbsolutePath(item, workspaceRoot))
+		.filter(Boolean);
+
+	const candidates = [
+		absoluteCurrent,
+		...imports,
+		...downstream,
+		...related,
+	].filter(Boolean);
+
+	const uniqueCandidates = [...new Set(candidates)].slice(0, 10);
+	const nodes: CodePaneFlowNode[] = uniqueCandidates.map((candidate, index) => {
+		const kind: CodePaneFlowNode['kind'] = candidate === absoluteCurrent
+			? 'current'
+			: imports.includes(candidate)
+				? 'import'
+				: downstream.includes(candidate)
+					? 'downstream'
+					: 'related';
+
+		return {
+			id: `node-${index + 1}`,
+			label: toWorkspaceRelative(candidate, workspaceRoot),
+			role: classifyArchitectureRole(candidate),
+			kind,
+		};
+	});
+
+	const idByLabel = new Map(nodes.map((node) => [node.label, node.id]));
+	const edges: CodePaneFlowEdge[] = [];
+
+	for (const importedFile of imports.slice(0, 6)) {
+		const fromLabel = toWorkspaceRelative(absoluteCurrent, workspaceRoot);
+		const toLabel = toWorkspaceRelative(importedFile, workspaceRoot);
+		const from = idByLabel.get(fromLabel);
+		const to = idByLabel.get(toLabel);
+		if (from && to) {
+			edges.push({ from, to, label: 'imports' });
+		}
+	}
+
+	for (const downstreamFile of downstream.slice(0, 4)) {
+		const fromLabel = toWorkspaceRelative(downstreamFile, workspaceRoot);
+		const toLabel = toWorkspaceRelative(absoluteCurrent, workspaceRoot);
+		const from = idByLabel.get(fromLabel);
+		const to = idByLabel.get(toLabel);
+		if (from && to) {
+			edges.push({ from, to, label: 'depends on' });
+		}
+	}
+
+	const summary = edges.length > 0
+		? `Inferred from import and downstream dependency signals across ${nodes.length} files.`
+		: `Inferred from filename roles for ${nodes.length} file${nodes.length === 1 ? '' : 's'}.`;
+
+	return {
+		title: 'Inferred Code Path',
+		summary,
+		nodes,
+		edges,
+	};
+}
+
+function pickFocusLine(result: TimeTraceAnalysisResult): number {
+	for (const finding of result.findings) {
+		if (finding.lineRange && finding.lineRange.length >= 2) {
+			return Math.max(1, finding.lineRange[0]);
+		}
+	}
+	for (const runtimeEvent of result.runtimeEvents) {
+		if (runtimeEvent.line && runtimeEvent.line > 0) {
+			return runtimeEvent.line;
+		}
+	}
+	const firstRange = result.changedLineRanges[0];
+	if (firstRange && firstRange.length >= 2) {
+		return Math.max(1, firstRange[0]);
+	}
+	return 1;
+}
+
+function buildSnippet(code: string, focusLine: number, radius = 4): CodePaneSnippet {
+	const lines = code.split(/\r?\n/);
+	const safeFocus = Math.max(1, Math.min(lines.length || 1, focusLine));
+	const startLine = Math.max(1, safeFocus - radius);
+	const endLine = Math.min(lines.length || 1, safeFocus + radius);
+	return {
+		startLine,
+		focusLine: safeFocus,
+		lines: lines.slice(startLine - 1, endLine),
+	};
+}
+
+function buildCodePanePayload(
+	filePath: string,
+	previousCode: string,
+	currentCode: string,
+	result: TimeTraceAnalysisResult,
+	workspaceRoot: string,
+	graph: WorkspaceGraph,
+): CodePanePayload {
+	const focusLine = pickFocusLine(result);
+	return {
+		currentFile: toWorkspaceRelative(filePath, workspaceRoot),
+		beforeSnippet: buildSnippet(previousCode, focusLine),
+		afterSnippet: buildSnippet(currentCode, focusLine),
+		findingLocations: result.findings.map((finding) => ({
+			id: finding.id,
+			message: finding.message,
+			filePath: toWorkspaceRelative(finding.filePath || filePath, workspaceRoot),
+			line: finding.lineRange?.[0],
+			severity: finding.severity,
+		})),
+		runtimeLocations: result.runtimeEvents.map((event) => ({
+			id: event.id,
+			message: event.message,
+			eventType: event.type,
+			filePath: toWorkspaceRelative(event.filePath || filePath, workspaceRoot),
+			line: event.line,
+			column: event.column,
+		})),
+		rootCauseFiles: result.probableRootCauses
+			.map((candidate) => toWorkspaceRelative(candidate.filePath, workspaceRoot))
+			.filter(Boolean),
+		relatedFiles: result.relatedFiles.map((relatedFile) => toWorkspaceRelative(relatedFile, workspaceRoot)).filter(Boolean),
+		impactedFiles: result.impactedFiles.map((impactedFile) => toWorkspaceRelative(impactedFile, workspaceRoot)).filter(Boolean),
+		flow: inferCodeFlow(filePath, workspaceRoot, graph, result),
+	};
+}
+
+export function buildCodePanePayloadFromCodePreview(
+	filePath: string,
+	codePreview: CodePreviewRecord,
+	result: TimeTraceAnalysisResult,
+	workspaceRoot: string,
+	graph: WorkspaceGraph,
+): CodePanePayload {
+	const startLine = Math.max(1, codePreview.startLine ?? 1);
+	const focusOffset = Math.max(1, codePreview.focusLine ?? 1);
+	const focusLine = startLine + focusOffset - 1;
+
+	return {
+		currentFile: toWorkspaceRelative(filePath, workspaceRoot),
+		beforeSnippet: {
+			startLine,
+			focusLine,
+			lines: codePreview.before,
+		},
+		afterSnippet: {
+			startLine,
+			focusLine,
+			lines: codePreview.after,
+		},
+		findingLocations: result.findings.map((finding) => ({
+			id: finding.id,
+			message: finding.message,
+			filePath: toWorkspaceRelative(finding.filePath || filePath, workspaceRoot),
+			line: finding.lineRange?.[0],
+			severity: finding.severity,
+		})),
+		runtimeLocations: result.runtimeEvents.map((event) => ({
+			id: event.id,
+			message: event.message,
+			eventType: event.type,
+			filePath: toWorkspaceRelative(event.filePath || filePath, workspaceRoot),
+			line: event.line,
+			column: event.column,
+		})),
+		rootCauseFiles: result.probableRootCauses
+			.map((candidate) => toWorkspaceRelative(candidate.filePath, workspaceRoot))
+			.filter(Boolean),
+		relatedFiles: result.relatedFiles.map((relatedFile) => toWorkspaceRelative(relatedFile, workspaceRoot)).filter(Boolean),
+		impactedFiles: result.impactedFiles.map((impactedFile) => toWorkspaceRelative(impactedFile, workspaceRoot)).filter(Boolean),
+		flow: inferCodeFlow(filePath, workspaceRoot, graph, result),
 	};
 }
 
@@ -90,10 +371,35 @@ export function activate(context: vscode.ExtensionContext) {
 		if (!latest) {
 			return;
 		}
+		const snapshot = snapshotStore.getSnapshot(filePath);
+		if (!snapshot) {
+			return;
+		}
+		const graph = snapshotStore.getWorkspaceGraph() ?? emptyGraph();
+		const timelineHistory = snapshotStore.getTimelineHistory(filePath);
+		const latestCheckpoint = timelineHistory[timelineHistory.length - 1];
+
+		const codePane = latestCheckpoint?.codePreview
+			? buildCodePanePayloadFromCodePreview(
+				filePath,
+				latestCheckpoint.codePreview,
+				latest.result,
+				workspaceRoot,
+				graph,
+			)
+			: buildCodePanePayload(
+				filePath,
+				snapshot.code,
+				snapshot.code,
+				latest.result,
+				workspaceRoot,
+				graph,
+			);
 
 		provider.publishAnalysisResult({
 			filePath,
 			...latest.result,
+			codePane,
 		});
 	}
 
@@ -238,6 +544,14 @@ export function activate(context: vscode.ExtensionContext) {
 		provider.publishAnalysisResult({
 			filePath: document.uri.fsPath,
 			...result,
+			codePane: buildCodePanePayload(
+				document.uri.fsPath,
+				previousSnapshot.code,
+				currentCode,
+				result,
+				workspaceRoot,
+				graph,
+			),
 		});
 
 		if (result.checkpoint) {
@@ -389,9 +703,69 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		webview.html = this.getHtml(webview);
 		this.postLastMessage();
 
-		webview.onDidReceiveMessage((message: { type?: string }) => {
+		webview.onDidReceiveMessage((message: WebviewMessage) => {
+			const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath ?? '';
+
+			const resolvePath = (candidatePath: string | undefined): string | undefined => {
+				const normalized = normalizeAbsolutePath(candidatePath ?? activeFile, vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '');
+				if (!normalized || !fs.existsSync(normalized)) {
+					return undefined;
+				}
+				return normalized;
+			};
+
+			const openPath = async (targetPath: string, line?: number, column?: number): Promise<void> => {
+				const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(targetPath));
+				const editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
+
+				if (!line || line < 1) {
+					return;
+				}
+
+				const safeLine = Math.max(1, Math.min(doc.lineCount, line));
+				const safeColumn = Math.max(1, column ?? 1);
+				const position = new vscode.Position(safeLine - 1, safeColumn - 1);
+				const range = new vscode.Range(position, position);
+				editor.selection = new vscode.Selection(position, position);
+				editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+			};
+
 			if (message.type === 'jumpToRootCause') {
 				void vscode.window.showInformationMessage('Focused root-cause evidence for the selected failure state.');
+				return;
+			}
+
+			if (message.type === 'openFile') {
+				const targetPath = resolvePath(message.payload?.filePath);
+				if (!targetPath) {
+					void vscode.window.showWarningMessage('TimeTrace AI: file not found for navigation request.');
+					return;
+				}
+				void openPath(targetPath);
+				return;
+			}
+
+			if (message.type === 'openLocation') {
+				const targetPath = resolvePath(message.payload?.filePath);
+				if (!targetPath) {
+					void vscode.window.showWarningMessage('TimeTrace AI: location file not found; opening active file if available.');
+					const fallback = resolvePath(activeFile);
+					if (fallback) {
+						void openPath(fallback, message.payload?.line, message.payload?.column);
+					}
+					return;
+				}
+				void openPath(targetPath, message.payload?.line, message.payload?.column);
+				return;
+			}
+
+			if (message.type === 'goToLine') {
+				const targetPath = resolvePath(message.payload?.filePath);
+				if (!targetPath) {
+					void vscode.window.showWarningMessage('TimeTrace AI: unable to determine file for go-to-line request.');
+					return;
+				}
+				void openPath(targetPath, message.payload?.line);
 			}
 		});
 	}
@@ -512,6 +886,12 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			</div>
 		</section>
 
+		<section class="card reveal" id="overview-root-cause-card" data-pane="overview">
+			<div class="card-title">Root Cause Analysis</div>
+			<p class="card-subtitle" id="overview-root-cause-summary">AI inferred causes for the selected checkpoint.</p>
+			<div class="ranking-list" id="overview-root-cause-list"></div>
+		</section>
+
 		<section class="card telemetry-card reveal" id="latency-card" data-pane="insights">
 			<div class="card-title">Checkpoint Signal</div>
 			<div class="sparkline-wrap">
@@ -555,11 +935,41 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="card-title">Relevant Code Segment</div>
 			<p class="card-subtitle">Only impacted lines are shown</p>
 			<div class="code-impact" id="changed-lines"></div>
-			<div class="code-toggle" role="tablist" aria-label="Before and after code states">
-				<button class="toggle-btn active" id="before-tab" data-state="before" type="button">Before</button>
-				<button class="toggle-btn" id="after-tab" data-state="after" type="button">After</button>
+			<div class="code-nav" id="code-nav">
+				<div class="code-nav-header">
+					<div class="mini-title">Editor Navigation</div>
+					<div class="code-nav-subtitle">Jump from analysis to source instantly</div>
+				</div>
+				<div class="code-nav-actions" id="code-nav-actions"></div>
+				<div class="code-go-line">
+					<label for="code-go-line-input">Go to line</label>
+					<div class="code-go-line-controls">
+						<input id="code-go-line-input" type="number" min="1" step="1" placeholder="42" />
+						<button class="btn btn-secondary" id="code-go-line-btn" type="button">Go</button>
+					</div>
+				</div>
 			</div>
-			<pre class="code-window" id="code-window" aria-live="polite"></pre>
+			<div class="snippet-layout" aria-live="polite">
+				<section class="snippet-panel" id="before-snippet-panel">
+					<div class="snippet-title-row">
+						<div class="mini-title">Before Snapshot</div>
+						<span class="mini-pill" id="before-focus-line">-</span>
+					</div>
+					<pre class="code-window" id="before-code-window"></pre>
+				</section>
+				<section class="snippet-panel" id="after-snippet-panel">
+					<div class="snippet-title-row">
+						<div class="mini-title">After Snapshot</div>
+						<span class="mini-pill" id="after-focus-line">-</span>
+					</div>
+					<pre class="code-window" id="after-code-window"></pre>
+				</section>
+			</div>
+			<div class="code-flow" id="code-flow">
+				<div class="mini-title">Inferred Architecture Path</div>
+				<div class="code-flow-summary" id="code-flow-summary"></div>
+				<div class="code-flow-nodes" id="code-flow-nodes"></div>
+			</div>
 		</section>
 
 		<section class="card flow-card reveal" id="impact-flow-card" data-pane="insights">

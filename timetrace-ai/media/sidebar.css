@@ -1140,6 +1140,96 @@ select {
   gap: 5px;
 }
 
+.code-nav {
+  margin: 6px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px;
+  background: color-mix(in srgb, var(--bg), black 10%);
+}
+
+.code-nav-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.code-nav-subtitle {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+}
+
+.code-nav-actions {
+  margin-top: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.code-nav-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 6%);
+  color: var(--text);
+  text-align: left;
+  font-size: 0.66rem;
+  padding: 7px 8px;
+  cursor: pointer;
+}
+
+.code-nav-btn:hover {
+  border-color: color-mix(in srgb, var(--accent), transparent 52%);
+}
+
+.code-go-line {
+  margin-top: 8px;
+}
+
+.code-go-line label {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  margin-bottom: 5px;
+}
+
+.code-go-line-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+}
+
+.code-go-line-controls input {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 2%);
+  color: var(--text);
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 0.68rem;
+}
+
+.snippet-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.snippet-panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 4%);
+}
+
+.snippet-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .impact-chip {
   padding: 3px 7px;
   border-radius: 999px;
@@ -1180,12 +1270,12 @@ select {
 }
 
 .code-window {
-  margin: 9px 0 0;
+  margin: 8px 0 0;
   padding: 10px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--bg), black 24%);
   border: 1px solid color-mix(in srgb, var(--accent), transparent 88%);
-  min-height: 108px;
+  min-height: 94px;
   overflow: auto;
   font-size: 0.67rem;
   line-height: 1.45;
@@ -1208,6 +1298,35 @@ select {
   border-left-color: var(--danger);
   background: rgba(255, 84, 99, 0.08);
   box-shadow: inset 0 0 0 1px rgba(255, 84, 99, 0.18);
+}
+
+.code-flow {
+  margin-top: 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.code-flow-summary {
+  margin: 4px 0 8px;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  line-height: 1.42;
+}
+
+.code-flow-nodes {
+  display: grid;
+  gap: 7px;
+}
+
+.flow-node-card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 9px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 3%);
+}
+
+.flow-current {
+  border-color: color-mix(in srgb, var(--accent), transparent 44%);
 }
 
 .flow {

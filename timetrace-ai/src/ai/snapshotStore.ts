@@ -15,6 +15,8 @@ export interface CodePreviewRecord {
 	before: string[];
 	after: string[];
 	focusLine: number;
+	startLine?: number;
+	endLine?: number;
 }
 
 export interface AnalysisRecord {

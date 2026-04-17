@@ -102,12 +102,20 @@
     checkpointTransition: document.getElementById("checkpoint-transition"),
     checkpointSummary: document.getElementById("checkpoint-summary"),
     checkpointTimestamp: document.getElementById("checkpoint-timestamp"),
+    overviewRootCauseSummary: document.getElementById("overview-root-cause-summary"),
+    overviewRootCauseList: document.getElementById("overview-root-cause-list"),
     rootCard: document.getElementById("root-cause-card"),
     rootCauseList: document.getElementById("root-cause-list"),
-    codeWindow: document.getElementById("code-window"),
+    beforeCodeWindow: document.getElementById("before-code-window"),
+    afterCodeWindow: document.getElementById("after-code-window"),
+    beforeFocusLine: document.getElementById("before-focus-line"),
+    afterFocusLine: document.getElementById("after-focus-line"),
+    codeNavActions: document.getElementById("code-nav-actions"),
+    codeGoLineInput: document.getElementById("code-go-line-input"),
+    codeGoLineBtn: document.getElementById("code-go-line-btn"),
+    codeFlowSummary: document.getElementById("code-flow-summary"),
+    codeFlowNodes: document.getElementById("code-flow-nodes"),
     changedLines: document.getElementById("changed-lines"),
-    beforeTab: document.getElementById("before-tab"),
-    afterTab: document.getElementById("after-tab"),
     findingsList: document.getElementById("findings-list"),
     runtimeEventsList: document.getElementById("runtime-events-list"),
     runtimeDetailType: document.getElementById("runtime-detail-type"),
@@ -151,15 +159,18 @@
     demoEntries: [],
     liveEntries: [],
     selectedIndex: 0,
-    codeState: "before",
     replayTimer: undefined,
     isReplaying: false,
     theme: "auto",
     typography: "mono",
     sourceLabel: "Demo mode",
     activePane: "overview",
+    codePane: undefined,
+    timelineItems: [],
     selectedIncidentId: undefined,
-    selectedRuntimeEventId: undefined
+    selectedRuntimeEventId: undefined,
+    selectedFindingId: undefined,
+    selectedRootCauseFile: undefined
   };
 
   function init() {
@@ -172,6 +183,8 @@
 
     appState.demoEntries = buildDemoTimeline(demoScenarios[0]);
     appState.selectedIndex = appState.demoEntries.length - 1;
+    appState.codePane = buildFallbackCodePaneFromEntry(appState.demoEntries[appState.selectedIndex]);
+    appState.timelineItems = buildTimelineItemsFromEntries(appState.demoEntries);
 
     window.addEventListener("message", (event) => {
       handleExtensionMessage(event.data);
@@ -188,17 +201,20 @@
       setDemoScenario(Number(event.target.value));
     });
 
-    elements.beforeTab.addEventListener("click", () => {
-      appState.codeState = "before";
-      updateCode(getSelectedEntry());
-      setCodeToggle();
-    });
+    if (elements.codeGoLineBtn) {
+      elements.codeGoLineBtn.addEventListener("click", () => {
+        submitManualGoToLine();
+      });
+    }
 
-    elements.afterTab.addEventListener("click", () => {
-      appState.codeState = "after";
-      updateCode(getSelectedEntry());
-      setCodeToggle();
-    });
+    if (elements.codeGoLineInput) {
+      elements.codeGoLineInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          submitManualGoToLine();
+        }
+      });
+    }
 
     if (elements.timelinePlayPause) {
       elements.timelinePlayPause.addEventListener("click", toggleReplay);
@@ -253,6 +269,7 @@
     }
 
     const payload = message.payload || message;
+    const canonicalTimelineItems = normalizeTimelineItems(payload.timelineItems);
 
     // Preserve timeline history: analysisResult payloads usually contain only
     // the latest analysis shape (no timelineHistory array). If we normalize
@@ -283,8 +300,10 @@
         impactedFiles: Array.isArray(payload.impactedFiles) ? payload.impactedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.impactedFiles
       };
 
+      appState.codePane = normalizeCodePane(payload.codePane, appState.liveEntries[latestIndex]);
+      appState.timelineItems = canonicalTimelineItems.length > 0 ? canonicalTimelineItems : appState.timelineItems;
+
       appState.selectedIndex = latestIndex;
-      appState.codeState = "after";
       appState.sourceLabel = buildSourceLabel(payload.filePath || latestEntry.filePath, appState.liveEntries.length);
       appState.replayTimer = clearTimer(appState.replayTimer);
       elements.scenarioRow.classList.add("hidden");
@@ -302,7 +321,10 @@
     appState.mode = "live";
     appState.liveEntries = entries;
     appState.selectedIndex = entries.length - 1;
-    appState.codeState = "after";
+    appState.codePane = normalizeCodePane(payload.codePane, entries[entries.length - 1]);
+    appState.timelineItems = canonicalTimelineItems.length > 0
+      ? canonicalTimelineItems
+      : buildTimelineItemsFromEntries(entries);
     appState.sourceLabel = buildSourceLabel(payload.filePath, entries.length);
     appState.replayTimer = clearTimer(appState.replayTimer);
     elements.scenarioRow.classList.add("hidden");
@@ -328,6 +350,94 @@
     }
 
     return [];
+  }
+
+  function normalizeTimelineItems(rawItems) {
+    if (!Array.isArray(rawItems) || rawItems.length === 0) {
+      return [];
+    }
+
+    return rawItems
+      .map((rawItem, index) => {
+        if (!rawItem || typeof rawItem !== "object") {
+          return undefined;
+        }
+
+        const kind = String(rawItem.kind || "").trim();
+        const timestampValue = String(rawItem.timestamp || "");
+        if (!kind || !timestampValue) {
+          return undefined;
+        }
+
+        if (kind === "checkpoint") {
+          return {
+            kind: "checkpoint",
+            checkpointId: String(rawItem.checkpointId || `checkpoint-${index + 1}`),
+            timestamp: timestampValue,
+            filePath: rawItem.filePath ? String(rawItem.filePath) : undefined,
+            state: normalizeState(rawItem.state || "NORMAL")
+          };
+        }
+
+        if (kind === "runtimeEvent") {
+          const runtimeType = normalizeRuntimeEventType(rawItem.eventType || rawItem.type);
+          return {
+            kind: "runtimeEvent",
+            runtimeEventId: String(rawItem.runtimeEventId || rawItem.id || `runtime-${index + 1}`),
+            timestamp: timestampValue,
+            filePath: rawItem.filePath ? String(rawItem.filePath) : undefined,
+            eventType: runtimeType,
+            message: String(rawItem.message || "Runtime event"),
+            severity: normalizeRuntimeSeverity(rawItem.severity),
+            relatedCheckpointId: rawItem.relatedCheckpointId ? String(rawItem.relatedCheckpointId) : undefined,
+            relatedIncidentId: rawItem.relatedIncidentId ? String(rawItem.relatedIncidentId) : undefined
+          };
+        }
+
+        if (kind === "incidentUpdate") {
+          return {
+            kind: "incidentUpdate",
+            incidentId: String(rawItem.incidentId || rawItem.id || `incident-${index + 1}`),
+            timestamp: timestampValue,
+            status: normalizeIncidentTimelineStatus(rawItem.status),
+            summary: String(rawItem.summary || "Incident updated"),
+            runtimeConfirmed: Boolean(rawItem.runtimeConfirmed)
+          };
+        }
+
+        return undefined;
+      })
+      .filter(Boolean)
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  function buildTimelineItemsFromEntries(entries) {
+    if (!Array.isArray(entries) || entries.length === 0) {
+      return [];
+    }
+
+    return entries
+      .map((entry) => ({
+        kind: "checkpoint",
+        checkpointId: entry.checkpointId || buildCheckpointId(entry.filePath || "", entry.timestamp || ""),
+        timestamp: entry.timestamp,
+        filePath: entry.filePath,
+        state: normalizeState(entry.state)
+      }))
+      .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  }
+
+  function normalizeRuntimeSeverity(value) {
+    const normalized = String(value || "warning").toLowerCase();
+    return normalized === "error" ? "error" : "warning";
+  }
+
+  function normalizeIncidentTimelineStatus(status) {
+    const normalized = String(status || "open").toLowerCase();
+    if (normalized === "mitigated" || normalized === "resolved") {
+      return normalized;
+    }
+    return "open";
   }
 
   function normalizeEntry(rawEntry, index, filePath) {
@@ -384,7 +494,9 @@
       codePreview: {
         before: ensureLines(codePreview.before),
         after: ensureLines(codePreview.after),
-        focusLine: Number.isFinite(Number(codePreview.focusLine)) ? Number(codePreview.focusLine) : 1
+        focusLine: Number.isFinite(Number(codePreview.focusLine)) ? Number(codePreview.focusLine) : 1,
+        startLine: Number.isFinite(Number(codePreview.startLine)) ? Number(codePreview.startLine) : 1,
+        endLine: Number.isFinite(Number(codePreview.endLine)) ? Number(codePreview.endLine) : undefined
       }
     };
   }
@@ -548,9 +660,12 @@
         ? rawEvent.stack.map(String)
         : [];
 
+    const runtimeType = normalizeRuntimeEventType(rawEvent.type || rawEvent.eventType);
+
     return {
       id: String(rawEvent.id || `runtime-${index + 1}`),
-      eventType: normalizeRuntimeEventType(rawEvent.eventType),
+      eventType: runtimeType,
+      type: runtimeType,
       message: String(rawEvent.message || rawEvent.summary || "Runtime event"),
       timestamp: String(rawEvent.timestamp || timestamp),
       severity: normalizeFindingSeverity(rawEvent.severity || rawEvent.level || "WARNING"),
@@ -571,15 +686,16 @@
     }
 
     const eventType = state === "ERROR"
-      ? "RUNTIME_ERROR"
+      ? "RuntimeError"
       : state === "WARNING"
-        ? "NETWORK_FAILURE"
-        : "CONSOLE_ERROR";
+        ? "NetworkFailure"
+        : "ConsoleError";
     const runtimeConfirmed = state === "ERROR" || checkpoint;
     return [
       {
         id: `runtime-${checkpointId}`,
         eventType,
+        type: eventType,
         message: normalizeRuntimeEventMessage(eventType, analysis),
         timestamp,
         severity: state === "ERROR" ? "ERROR" : "WARNING",
@@ -596,10 +712,13 @@
   }
 
   function buildRuntimeEventFromState(filePath, checkpointId, timestamp, state, checkpoint, findings, probableRootCauses, index) {
+    const eventType = state === "ERROR" ? "RuntimeError" : state === "WARNING" ? "ConsoleError" : "NetworkFailure";
+
     return {
       id: `runtime-${index + 1}-${checkpointId}`,
-      eventType: state === "ERROR" ? "RUNTIME_ERROR" : state === "WARNING" ? "CONSOLE_ERROR" : "NETWORK_FAILURE",
-      message: normalizeRuntimeEventMessage(state === "ERROR" ? "RUNTIME_ERROR" : "CONSOLE_ERROR", `State ${state}`),
+      eventType,
+      type: eventType,
+      message: normalizeRuntimeEventMessage(eventType, `State ${state}`),
       timestamp,
       severity: state === "ERROR" ? "ERROR" : "WARNING",
       filePath,
@@ -614,12 +733,27 @@
   }
 
   function normalizeRuntimeEventType(value) {
-    const normalized = String(value || "CONSOLE_ERROR").toUpperCase();
-    if (normalized === "RUNTIME_ERROR" || normalized === "UNHANDLED_REJECTION" || normalized === "CONSOLE_ERROR" || normalized === "NETWORK_FAILURE") {
+    const normalized = String(value || "ConsoleError").trim();
+
+    if (normalized === "RuntimeError" || normalized === "UnhandledRejection" || normalized === "ConsoleError" || normalized === "NetworkFailure") {
       return normalized;
     }
 
-    return "CONSOLE_ERROR";
+    const legacy = normalized.toUpperCase();
+    if (legacy === "RUNTIME_ERROR") {
+      return "RuntimeError";
+    }
+    if (legacy === "UNHANDLED_REJECTION") {
+      return "UnhandledRejection";
+    }
+    if (legacy === "CONSOLE_ERROR") {
+      return "ConsoleError";
+    }
+    if (legacy === "NETWORK_FAILURE") {
+      return "NetworkFailure";
+    }
+
+    return "ConsoleError";
   }
 
   function normalizeRuntimeConfirmationState(value, state, runtimeConfirmed) {
@@ -636,15 +770,15 @@
   }
 
   function normalizeRuntimeEventMessage(eventType, analysis) {
-    if (eventType === "RUNTIME_ERROR") {
+    if (eventType === "RuntimeError") {
       return `Runtime error: ${analysis}`;
     }
 
-    if (eventType === "UNHANDLED_REJECTION") {
+    if (eventType === "UnhandledRejection") {
       return `Unhandled promise rejection: ${analysis}`;
     }
 
-    if (eventType === "NETWORK_FAILURE") {
+    if (eventType === "NetworkFailure") {
       return `Network/API failure: ${analysis}`;
     }
 
@@ -919,7 +1053,8 @@
     return [
       {
         id: `runtime-${scenario.name.toLowerCase().replace(/\s+/g, "-")}-1`,
-        eventType: "NETWORK_FAILURE",
+        eventType: "NetworkFailure",
+        type: "NetworkFailure",
         message: `${scenario.analysis.summary} API request failed at runtime.`,
         timestamp: new Date(Date.now() - 82000).toISOString(),
         severity: "ERROR",
@@ -938,7 +1073,8 @@
       },
       {
         id: `runtime-${scenario.name.toLowerCase().replace(/\s+/g, "-")}-2`,
-        eventType: "CONSOLE_ERROR",
+        eventType: "ConsoleError",
+        type: "ConsoleError",
         message: "Console error surfaced during follow-up execution.",
         timestamp: new Date(Date.now() - 38000).toISOString(),
         severity: "WARNING",
@@ -1046,7 +1182,8 @@
     appState.demoScenarioIndex = index;
     appState.demoEntries = buildDemoTimeline(demoScenarios[index]);
     appState.selectedIndex = appState.demoEntries.length - 1;
-    appState.codeState = "after";
+    appState.codePane = buildFallbackCodePaneFromEntry(appState.demoEntries[appState.selectedIndex]);
+    appState.timelineItems = buildTimelineItemsFromEntries(appState.demoEntries);
     appState.sourceLabel = "Demo mode";
     appState.replayTimer = clearTimer(appState.replayTimer);
     elements.timelineWrap.classList.remove("replaying");
@@ -1060,6 +1197,8 @@
     appState.mode = "live";
     appState.liveEntries = [];
     appState.selectedIndex = 0;
+    appState.codePane = undefined;
+    appState.timelineItems = [];
     appState.sourceLabel = buildSourceLabel(filePath || "Live file", 0);
     elements.scenarioRow.classList.add("hidden");
     updateView({ animateText: false });
@@ -1193,7 +1332,6 @@
   renderUnifiedTimeline(entries);
     renderFileContext(selected.relatedFiles, selected.impactedFiles);
     updateCode(selected);
-    setCodeToggle();
     updateSignalChart(entries, selected);
     updateAnalysis(selected, animateText);
   }
@@ -1207,6 +1345,8 @@
     elements.checkpointTimestamp.textContent = "No checkpoint history yet.";
     elements.rootCard.classList.remove("hidden");
     elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+    elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+    elements.overviewRootCauseSummary.textContent = "AI inferred causes will appear when findings are available.";
     elements.findingsList.innerHTML = '<div class="empty-state">No findings yet.</div>';
     elements.runtimeEventsList.innerHTML = '<div class="empty-state">No runtime events captured yet.</div>';
     elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
@@ -1216,7 +1356,13 @@
     elements.relatedFilesList.innerHTML = '<div class="empty-state">No related files yet.</div>';
     elements.impactedFilesList.innerHTML = '<div class="empty-state">No impacted files yet.</div>';
     elements.changedLines.innerHTML = '<span class="impact-chip">No changed lines yet</span>';
-    elements.codeWindow.innerHTML = '<div class="code-line"><span class="code-line-number">1</span><span>// waiting for checkpoint data</span></div>';
+    elements.beforeCodeWindow.innerHTML = '<div class="code-line"><span class="code-line-number">1</span><span>// waiting for checkpoint data</span></div>';
+    elements.afterCodeWindow.innerHTML = '<div class="code-line"><span class="code-line-number">1</span><span>// waiting for checkpoint data</span></div>';
+    elements.beforeFocusLine.textContent = "Focus L-";
+    elements.afterFocusLine.textContent = "Focus L-";
+    elements.codeNavActions.innerHTML = '<div class="empty-state">No navigation targets available yet.</div>';
+    elements.codeFlowSummary.textContent = "Flow will appear after analysis payload arrives.";
+    elements.codeFlowNodes.innerHTML = '<div class="empty-state">No flow inference available yet.</div>';
     elements.summary.textContent = "Awaiting checkpoint history from the extension bridge.";
     elements.latencyValue.textContent = "0";
   }
@@ -1372,10 +1518,12 @@
   function renderRootCauseCandidates(probableRootCauses) {
     if (!Array.isArray(probableRootCauses) || probableRootCauses.length === 0) {
       elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+      elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+      elements.overviewRootCauseSummary.textContent = "No strong root-cause signal is available for the selected checkpoint.";
       return;
     }
 
-    elements.rootCauseList.innerHTML = probableRootCauses
+    const renderedRootCauses = probableRootCauses
       .map((candidate, index) => `
         <article class="root-cause-item">
           <div class="ranking-index">${index + 1}</div>
@@ -1392,6 +1540,14 @@
         </article>
       `)
       .join("");
+
+    elements.rootCauseList.innerHTML = renderedRootCauses;
+    elements.overviewRootCauseList.innerHTML = renderedRootCauses;
+
+    const top = probableRootCauses[0];
+    elements.overviewRootCauseSummary.textContent = top
+      ? `Top inferred cause: ${top.reason || top.filePath || "Unknown"}`
+      : "AI inferred causes for the selected checkpoint.";
   }
 
   function renderRuntimeEvents(runtimeEvents, selectedEntry) {
@@ -1409,7 +1565,7 @@
         return `
           <button class="runtime-event-item ${selected ? "selected" : ""}" type="button" data-runtime-event-id="${escapeHtml(event.id)}">
             <div class="finding-topline">
-              <strong>${escapeHtml(String(event.eventType).replace(/_/g, " "))}</strong>
+              <strong>${escapeHtml(formatRuntimeEventTypeLabel(event.type || event.eventType))}</strong>
               <span class="mini-pill ${confirmedClass}">${escapeHtml(runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed))}</span>
             </div>
             <p>${escapeHtml(String(event.message))}</p>
@@ -1456,7 +1612,7 @@
       return;
     }
 
-    elements.runtimeDetailType.textContent = String(event.eventType).replace(/_/g, " ");
+    elements.runtimeDetailType.textContent = formatRuntimeEventTypeLabel(event.type || event.eventType);
     elements.runtimeDetailStatus.textContent = runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed);
     elements.runtimeDetailMessage.textContent = event.message;
     elements.runtimeDetailTime.textContent = event.timestamp || "-";
@@ -1486,32 +1642,82 @@
       return;
     }
 
-    const selectedTimelineItem = {
-      kind: "checkpoint",
-      id: selectedEntry.checkpointId || buildCheckpointId(selectedEntry.filePath, selectedEntry.timestamp),
-      title: `${selectedEntry.state} checkpoint`,
-      message: selectedEntry.analysis,
-      subtitle: `${selectedEntry.previousState} → ${selectedEntry.state} · ${selectedEntry.checkpoint ? "checkpoint" : "save"}`,
-      timestampLabel: selectedEntry.timestamp,
-      timestampValue: new Date(selectedEntry.timestamp).getTime() || 0,
-      state: selectedEntry.state
-    };
+    const timelineItems = Array.isArray(appState.timelineItems) && appState.timelineItems.length > 0
+      ? appState.timelineItems
+      : buildTimelineItemsFromEntries(entries);
 
-    elements.timelineStream.innerHTML = `
-      <button class="timeline-item selected" type="button" data-timeline-kind="checkpoint" data-timeline-id="${escapeHtml(selectedTimelineItem.id)}">
-        <span class="timeline-item-marker ${stateClass(selectedTimelineItem.state)}"></span>
-        <div class="timeline-item-body">
-          <div class="finding-topline">
-            <strong>${escapeHtml(selectedTimelineItem.title)}</strong>
-            <span class="mini-pill">${escapeHtml(selectedTimelineItem.timestampLabel)}</span>
-          </div>
-          <p>${escapeHtml(selectedTimelineItem.message)}</p>
-          <div class="finding-meta">
-            <span>${escapeHtml(selectedTimelineItem.subtitle)}</span>
-          </div>
-        </div>
-      </button>
-    `;
+    if (timelineItems.length === 0) {
+      elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
+      return;
+    }
+
+    const activeCheckpointId = selectedEntry.checkpointId || buildCheckpointId(selectedEntry.filePath, selectedEntry.timestamp);
+    const activeRuntimeEventId = appState.selectedRuntimeEventId;
+    const activeIncidentId = appState.selectedIncidentId;
+
+    elements.timelineStream.innerHTML = timelineItems
+      .map((item) => {
+        if (item.kind === "checkpoint") {
+          const selected = item.checkpointId === activeCheckpointId;
+          const message = selected && selectedEntry.analysis
+            ? selectedEntry.analysis
+            : `${item.state} state checkpoint`;
+          return `
+            <button class="timeline-item ${selected ? "selected" : ""}" type="button" data-timeline-kind="checkpoint" data-timeline-id="${escapeHtml(item.checkpointId)}">
+              <span class="timeline-item-marker ${stateClass(item.state)}"></span>
+              <div class="timeline-item-body">
+                <div class="finding-topline">
+                  <strong>${escapeHtml(`${item.state} checkpoint`)}</strong>
+                  <span class="mini-pill">${escapeHtml(String(item.timestamp))}</span>
+                </div>
+                <p>${escapeHtml(message)}</p>
+                <div class="finding-meta">
+                  <span>${escapeHtml(item.filePath || "checkpoint")}</span>
+                </div>
+              </div>
+            </button>
+          `;
+        }
+
+        if (item.kind === "runtimeEvent") {
+          const selected = item.runtimeEventId === activeRuntimeEventId;
+          const severityClass = item.severity === "error" ? "error" : "warning";
+          return `
+            <button class="timeline-item ${selected ? "selected" : ""}" type="button" data-timeline-kind="runtimeEvent" data-timeline-id="${escapeHtml(item.runtimeEventId)}">
+              <span class="timeline-item-marker ${severityClass}"></span>
+              <div class="timeline-item-body">
+                <div class="finding-topline">
+                  <strong>${escapeHtml(formatRuntimeEventTypeLabel(item.eventType))}</strong>
+                  <span class="mini-pill">${escapeHtml(String(item.timestamp))}</span>
+                </div>
+                <p>${escapeHtml(item.message || "Runtime event")}</p>
+                <div class="finding-meta">
+                  <span>${escapeHtml(item.filePath || "runtime")}</span>
+                </div>
+              </div>
+            </button>
+          `;
+        }
+
+        const selected = item.incidentId === activeIncidentId;
+        const statusClass = item.status === "resolved" ? "normal" : item.status === "mitigated" ? "warning" : "error";
+        return `
+          <button class="timeline-item ${selected ? "selected" : ""}" type="button" data-timeline-kind="incidentUpdate" data-timeline-id="${escapeHtml(item.incidentId)}">
+            <span class="timeline-item-marker ${statusClass}"></span>
+            <div class="timeline-item-body">
+              <div class="finding-topline">
+                <strong>${escapeHtml(`Incident ${item.status}`)}</strong>
+                <span class="mini-pill">${escapeHtml(String(item.timestamp))}</span>
+              </div>
+              <p>${escapeHtml(item.summary || "Incident update")}</p>
+              <div class="finding-meta">
+                <span>${escapeHtml(item.runtimeConfirmed ? "Runtime confirmed" : "Analysis-only")}</span>
+              </div>
+            </div>
+          </button>
+        `;
+      })
+      .join("");
 
     elements.timelineStream.querySelectorAll("[data-timeline-kind]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1529,8 +1735,11 @@
           return;
         }
 
-        const runtimeEvent = entries.flatMap((entry) => Array.isArray(entry.runtimeEvents) ? entry.runtimeEvents : []).find((event) => event.id === id);
-        if (runtimeEvent) {
+        if (kind === "runtimeEvent") {
+          const runtimeEvent = entries.flatMap((entry) => Array.isArray(entry.runtimeEvents) ? entry.runtimeEvents : []).find((event) => event.id === id);
+          if (!runtimeEvent) {
+            return;
+          }
           appState.selectedRuntimeEventId = runtimeEvent.id;
           const selectedEntry = getSelectedEntry();
           renderRuntimeEventDetail(runtimeEvent);
@@ -1542,6 +1751,16 @@
             }
           }
           applyPaneVisibility();
+          return;
+        }
+
+        if (kind === "incidentUpdate") {
+          appState.selectedIncidentId = id;
+          const selectedEntry = getSelectedEntry();
+          if (selectedEntry && Array.isArray(selectedEntry.incidents)) {
+            renderIncidentList(selectedEntry.incidents, selectedEntry);
+            renderIncidentDetail(selectedEntry, getSelectedIncident(selectedEntry));
+          }
         }
       });
     });
@@ -1718,20 +1937,34 @@
   }
 
   function runtimeEventTypeClass(eventType) {
-    const normalized = String(eventType || "CONSOLE_ERROR").toUpperCase();
-    if (normalized === "NETWORK_FAILURE") {
+    const normalized = normalizeRuntimeEventType(eventType);
+    if (normalized === "NetworkFailure") {
       return "warning";
     }
 
-    if (normalized === "UNHANDLED_REJECTION") {
+    if (normalized === "UnhandledRejection") {
       return "error";
     }
 
-    if (normalized === "RUNTIME_ERROR") {
+    if (normalized === "RuntimeError") {
       return "error";
     }
 
     return "warning";
+  }
+
+  function formatRuntimeEventTypeLabel(eventType) {
+    const normalized = normalizeRuntimeEventType(eventType);
+    if (normalized === "RuntimeError") {
+      return "Runtime Error";
+    }
+    if (normalized === "UnhandledRejection") {
+      return "Unhandled Rejection";
+    }
+    if (normalized === "NetworkFailure") {
+      return "Network Failure";
+    }
+    return "Console Error";
   }
 
   function runtimeConfirmationClass(state, runtimeConfirmed) {
@@ -1783,22 +2016,374 @@
   }
 
   function updateCode(entry) {
-    const lines = appState.codeState === "before" ? entry.codePreview.before : entry.codePreview.after;
-    const focusLine = Math.max(1, Number(entry.codePreview.focusLine) || 1);
+    const codePane = normalizeCodePane(appState.codePane, entry);
+    const focusedLine = getPreferredFocusLine(codePane, entry);
+    const beforeSnippet = selectSnippet(codePane.beforeSnippet, entry.codePreview.before, focusedLine, entry.codePreview.startLine || 1);
+    const afterSnippet = selectSnippet(codePane.afterSnippet, entry.codePreview.after, focusedLine, entry.codePreview.startLine || 1);
 
-    elements.codeWindow.innerHTML = lines
+    elements.beforeCodeWindow.innerHTML = renderSnippetLines(beforeSnippet);
+    elements.afterCodeWindow.innerHTML = renderSnippetLines(afterSnippet);
+    elements.beforeFocusLine.textContent = `Focus L${focusedLine}`;
+    elements.afterFocusLine.textContent = `Focus L${focusedLine}`;
+
+    renderCodeNavigation(codePane, entry, focusedLine);
+    renderCodeFlow(codePane.flow);
+  }
+
+  function normalizeCodePane(rawCodePane, entry) {
+    if (rawCodePane && typeof rawCodePane === "object") {
+      return {
+        currentFile: String(rawCodePane.currentFile || entry.filePath || ""),
+        beforeSnippet: normalizeSnippet(rawCodePane.beforeSnippet, entry.codePreview.before, entry.codePreview.startLine || 1, entry.codePreview.focusLine || 1),
+        afterSnippet: normalizeSnippet(rawCodePane.afterSnippet, entry.codePreview.after, entry.codePreview.startLine || 1, entry.codePreview.focusLine || 1),
+        findingLocations: Array.isArray(rawCodePane.findingLocations) ? rawCodePane.findingLocations.map((location) => ({
+          id: String(location.id || "finding"),
+          message: String(location.message || "Finding"),
+          filePath: String(location.filePath || entry.filePath || ""),
+          line: Number.isFinite(Number(location.line)) ? Number(location.line) : undefined,
+          severity: String(location.severity || "warning")
+        })) : [],
+        runtimeLocations: Array.isArray(rawCodePane.runtimeLocations) ? rawCodePane.runtimeLocations.map((location) => ({
+          id: String(location.id || "runtime"),
+          message: String(location.message || "Runtime event"),
+          eventType: normalizeRuntimeEventType(location.eventType || location.type),
+          type: normalizeRuntimeEventType(location.eventType || location.type),
+          filePath: String(location.filePath || entry.filePath || ""),
+          line: Number.isFinite(Number(location.line)) ? Number(location.line) : undefined,
+          column: Number.isFinite(Number(location.column)) ? Number(location.column) : undefined
+        })) : [],
+        rootCauseFiles: Array.isArray(rawCodePane.rootCauseFiles) ? rawCodePane.rootCauseFiles.map(String) : [],
+        relatedFiles: Array.isArray(rawCodePane.relatedFiles) ? rawCodePane.relatedFiles.map(String) : entry.relatedFiles.map((item) => item.filePath),
+        impactedFiles: Array.isArray(rawCodePane.impactedFiles) ? rawCodePane.impactedFiles.map(String) : entry.impactedFiles.map((item) => item.filePath),
+        flow: normalizeFlow(rawCodePane.flow, entry)
+      };
+    }
+
+    return buildFallbackCodePaneFromEntry(entry);
+  }
+
+  function buildFallbackCodePaneFromEntry(entry) {
+    const baseFile = entry.filePath || "";
+    return {
+      currentFile: baseFile,
+      beforeSnippet: normalizeSnippet(undefined, entry.codePreview.before, entry.codePreview.startLine || 1, entry.codePreview.focusLine || 1),
+      afterSnippet: normalizeSnippet(undefined, entry.codePreview.after, entry.codePreview.startLine || 1, entry.codePreview.focusLine || 1),
+      findingLocations: (entry.findings || []).map((finding) => ({
+        id: String(finding.id || "finding"),
+        message: String(finding.message || "Finding"),
+        filePath: baseFile,
+        line: Array.isArray(finding.lineRanges) && finding.lineRanges[0] ? Number(finding.lineRanges[0][0]) : undefined,
+        severity: String(finding.severity || "warning")
+      })),
+      runtimeLocations: (entry.runtimeEvents || []).map((event) => ({
+        id: String(event.id || "runtime"),
+        message: String(event.message || "Runtime event"),
+        eventType: normalizeRuntimeEventType(event.type || event.eventType),
+        type: normalizeRuntimeEventType(event.type || event.eventType),
+        filePath: String(event.filePath || baseFile),
+        line: Number.isFinite(Number(event.line)) ? Number(event.line) : undefined,
+        column: undefined
+      })),
+      rootCauseFiles: (entry.probableRootCauses || []).map((candidate) => String(candidate.filePath || "")).filter(Boolean),
+      relatedFiles: (entry.relatedFiles || []).map((file) => String(file.filePath || "")).filter(Boolean),
+      impactedFiles: (entry.impactedFiles || []).map((file) => String(file.filePath || "")).filter(Boolean),
+      flow: normalizeFlow(undefined, entry)
+    };
+  }
+
+  function normalizeSnippet(rawSnippet, fallbackLines, fallbackStartLine, fallbackFocusLine) {
+    if (rawSnippet && typeof rawSnippet === "object" && Array.isArray(rawSnippet.lines) && rawSnippet.lines.length > 0) {
+      return {
+        startLine: Number.isFinite(Number(rawSnippet.startLine)) ? Number(rawSnippet.startLine) : fallbackStartLine,
+        focusLine: Number.isFinite(Number(rawSnippet.focusLine)) ? Number(rawSnippet.focusLine) : fallbackFocusLine,
+        lines: rawSnippet.lines.map((line) => String(line))
+      };
+    }
+
+    return {
+      startLine: fallbackStartLine,
+      focusLine: fallbackFocusLine,
+      lines: Array.isArray(fallbackLines) && fallbackLines.length > 0 ? fallbackLines : ["// no preview available"]
+    };
+  }
+
+  function normalizeFlow(rawFlow, entry) {
+    if (rawFlow && typeof rawFlow === "object") {
+      const nodes = Array.isArray(rawFlow.nodes) ? rawFlow.nodes.map((node, index) => ({
+        id: String(node.id || `node-${index + 1}`),
+        label: String(node.label || "module"),
+        role: String(node.role || "Module"),
+        kind: String(node.kind || "related")
+      })) : [];
+      const edges = Array.isArray(rawFlow.edges) ? rawFlow.edges.map((edge) => ({
+        from: String(edge.from || ""),
+        to: String(edge.to || ""),
+        label: edge.label ? String(edge.label) : ""
+      })).filter((edge) => edge.from && edge.to) : [];
+      return {
+        title: String(rawFlow.title || "Inferred Code Path"),
+        summary: String(rawFlow.summary || "Inferred from file and dependency signals."),
+        nodes,
+        edges
+      };
+    }
+
+    const currentFile = entry.filePath || "current file";
+    const candidates = [
+      currentFile,
+      ...(entry.relatedFiles || []).map((item) => item.filePath),
+      ...(entry.impactedFiles || []).map((item) => item.filePath),
+      ...(entry.probableRootCauses || []).map((candidate) => candidate.filePath)
+    ].filter(Boolean);
+    const unique = [...new Set(candidates)].slice(0, 6);
+    const nodes = unique.map((label, index) => ({
+      id: `node-${index + 1}`,
+      label,
+      role: inferRoleFromLabel(label),
+      kind: index === 0 ? "current" : "related"
+    }));
+    const edges = nodes.slice(1).map((node) => ({
+      from: nodes[0].id,
+      to: node.id,
+      label: "touches"
+    }));
+
+    return {
+      title: "Inferred Code Path",
+      summary: "Fallback flow inferred from related, impacted, and root-cause file signals.",
+      nodes,
+      edges
+    };
+  }
+
+  function inferRoleFromLabel(label) {
+    const value = String(label || "").toLowerCase();
+    if (/route|router|endpoint/.test(value)) { return "Route"; }
+    if (/controller|handler/.test(value)) { return "Handler"; }
+    if (/service|manager|provider/.test(value)) { return "Service"; }
+    if (/repo|repository|dao/.test(value)) { return "Repository"; }
+    if (/cache|redis/.test(value)) { return "Cache"; }
+    if (/db|database|postgres|mongo|prisma|sql/.test(value)) { return "Database"; }
+    if (/api|client|fetch|axios/.test(value)) { return "API Client"; }
+    if (/worker|job|queue/.test(value)) { return "Worker"; }
+    if (/auth|middleware/.test(value)) { return "Middleware"; }
+    return "Module";
+  }
+
+  function getPreferredFocusLine(codePane, entry) {
+    const finding = (codePane.findingLocations || []).find((item) => item.id === appState.selectedFindingId)
+      || (codePane.findingLocations || [])[0];
+    if (finding && Number.isFinite(Number(finding.line))) {
+      return Number(finding.line);
+    }
+
+    const runtime = (codePane.runtimeLocations || []).find((item) => item.id === appState.selectedRuntimeEventId)
+      || (codePane.runtimeLocations || [])[0];
+    if (runtime && Number.isFinite(Number(runtime.line))) {
+      return Number(runtime.line);
+    }
+
+    if (entry.codePreview && Number.isFinite(Number(entry.codePreview.focusLine))) {
+      const startLine = Number(entry.codePreview.startLine || 1);
+      return startLine + Number(entry.codePreview.focusLine) - 1;
+    }
+
+    return Number(codePane.afterSnippet.focusLine || 1);
+  }
+
+  function selectSnippet(snippet, fallbackLines, focusedLine, fallbackStartLine) {
+    const normalized = normalizeSnippet(snippet, fallbackLines, fallbackStartLine, focusedLine);
+    if (focusedLine >= normalized.startLine && focusedLine <= normalized.startLine + normalized.lines.length - 1) {
+      return {
+        ...normalized,
+        focusLine: focusedLine
+      };
+    }
+
+    return normalized;
+  }
+
+  function renderSnippetLines(snippet) {
+    const focus = Math.max(1, Number(snippet.focusLine) || 1);
+    return snippet.lines
       .map((line, index) => {
-        const lineNumber = index + 1;
-        const lineClass = lineNumber === focusLine ? "code-line problem" : "code-line";
-        return `<div class="${lineClass}"><span class="code-line-number">${lineNumber}</span><span>${escapeHtml(line)}</span></div>`;
+        const lineNumber = Number(snippet.startLine) + index;
+        const lineClass = lineNumber === focus ? "code-line problem" : "code-line";
+        return `<div class="${lineClass}"><span class="code-line-number">${lineNumber}</span><span>${escapeHtml(String(line))}</span></div>`;
       })
       .join("");
   }
 
-  function setCodeToggle() {
-    const beforeActive = appState.codeState === "before";
-    elements.beforeTab.classList.toggle("active", beforeActive);
-    elements.afterTab.classList.toggle("active", !beforeActive);
+  function renderCodeNavigation(codePane, entry, focusedLine) {
+    const buttons = [];
+
+    codePane.findingLocations.slice(0, 3).forEach((finding) => {
+      const lineLabel = finding.line ? `L${finding.line}` : "file";
+      buttons.push(`
+        <button class="code-nav-btn" type="button" data-nav-type="finding" data-id="${escapeHtml(finding.id)}" data-file="${escapeHtml(finding.filePath)}" data-line="${finding.line || ""}">
+          Jump to finding: ${escapeHtml(lineLabel)}
+        </button>
+      `);
+    });
+
+    codePane.runtimeLocations.slice(0, 3).forEach((runtimeEvent) => {
+      const lineLabel = runtimeEvent.line ? `L${runtimeEvent.line}` : "file";
+      buttons.push(`
+        <button class="code-nav-btn" type="button" data-nav-type="runtime" data-id="${escapeHtml(runtimeEvent.id)}" data-file="${escapeHtml(runtimeEvent.filePath)}" data-line="${runtimeEvent.line || ""}" data-column="${runtimeEvent.column || ""}">
+          Jump to runtime event: ${escapeHtml(lineLabel)}
+        </button>
+      `);
+    });
+
+    codePane.rootCauseFiles.slice(0, 3).forEach((rootFile) => {
+      buttons.push(`
+        <button class="code-nav-btn" type="button" data-nav-type="root" data-file="${escapeHtml(rootFile)}">
+          Open root-cause file: ${escapeHtml(trimPathLabel(rootFile))}
+        </button>
+      `);
+    });
+
+    codePane.relatedFiles.slice(0, 2).forEach((relatedFile) => {
+      buttons.push(`
+        <button class="code-nav-btn" type="button" data-nav-type="related" data-file="${escapeHtml(relatedFile)}">
+          Open related file: ${escapeHtml(trimPathLabel(relatedFile))}
+        </button>
+      `);
+    });
+
+    codePane.impactedFiles.slice(0, 2).forEach((impactedFile) => {
+      buttons.push(`
+        <button class="code-nav-btn" type="button" data-nav-type="impacted" data-file="${escapeHtml(impactedFile)}">
+          Open impacted file: ${escapeHtml(trimPathLabel(impactedFile))}
+        </button>
+      `);
+    });
+
+    if (buttons.length === 0) {
+      elements.codeNavActions.innerHTML = '<div class="empty-state">No navigation targets available for this checkpoint.</div>';
+    } else {
+      elements.codeNavActions.innerHTML = buttons.join("");
+    }
+
+    elements.codeNavActions.querySelectorAll("[data-nav-type]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const navType = button.getAttribute("data-nav-type");
+        const filePath = button.getAttribute("data-file") || codePane.currentFile || entry.filePath;
+        const line = Number(button.getAttribute("data-line"));
+        const column = Number(button.getAttribute("data-column"));
+        const itemId = button.getAttribute("data-id");
+
+        if (navType === "finding") {
+          appState.selectedFindingId = itemId || appState.selectedFindingId;
+          vscode.postMessage({
+            type: "openLocation",
+            payload: {
+              filePath,
+              line: Number.isFinite(line) && line > 0 ? line : focusedLine
+            }
+          });
+          updateCode(entry);
+          return;
+        }
+
+        if (navType === "runtime") {
+          appState.selectedRuntimeEventId = itemId || appState.selectedRuntimeEventId;
+          vscode.postMessage({
+            type: "openLocation",
+            payload: {
+              filePath,
+              line: Number.isFinite(line) && line > 0 ? line : focusedLine,
+              column: Number.isFinite(column) && column > 0 ? column : undefined
+            }
+          });
+          updateCode(entry);
+          return;
+        }
+
+        if (navType === "root") {
+          appState.selectedRootCauseFile = filePath;
+          vscode.postMessage({ type: "openFile", payload: { filePath } });
+          return;
+        }
+
+        if (navType === "related" || navType === "impacted") {
+          vscode.postMessage({ type: "openFile", payload: { filePath } });
+        }
+      });
+    });
+  }
+
+  function submitManualGoToLine() {
+    if (!elements.codeGoLineInput) {
+      return;
+    }
+    const value = Number(elements.codeGoLineInput.value);
+    if (!Number.isFinite(value) || value < 1) {
+      return;
+    }
+
+    const selectedEntry = getSelectedEntry();
+    const activeCodePane = normalizeCodePane(appState.codePane, selectedEntry || {
+      filePath: "",
+      codePreview: { before: [], after: [], startLine: 1, focusLine: 1 },
+      findings: [],
+      runtimeEvents: [],
+      probableRootCauses: [],
+      relatedFiles: [],
+      impactedFiles: []
+    });
+
+    vscode.postMessage({
+      type: "goToLine",
+      payload: {
+        filePath: activeCodePane.currentFile || selectedEntry?.filePath,
+        line: value
+      }
+    });
+  }
+
+  function renderCodeFlow(flow) {
+    if (!flow || !Array.isArray(flow.nodes) || flow.nodes.length === 0) {
+      elements.codeFlowSummary.textContent = "No inferred flow available for this checkpoint.";
+      elements.codeFlowNodes.innerHTML = '<div class="empty-state">No dependency path inferred.</div>';
+      return;
+    }
+
+    elements.codeFlowSummary.textContent = flow.summary || "Inferred from imports, impacted files, and naming heuristics.";
+
+    const nodeById = new Map(flow.nodes.map((node) => [node.id, node]));
+    const renderedEdges = Array.isArray(flow.edges) ? flow.edges : [];
+
+    elements.codeFlowNodes.innerHTML = flow.nodes
+      .map((node) => {
+        const outgoing = renderedEdges.filter((edge) => edge.from === node.id).map((edge) => {
+          const target = nodeById.get(edge.to);
+          if (!target) {
+            return "";
+          }
+          const label = edge.label ? `${edge.label} -> ` : "-> ";
+          return `<span class="mini-pill">${escapeHtml(label + target.role)}</span>`;
+        }).join("");
+        return `
+          <article class="flow-node-card flow-${escapeHtml(String(node.kind || "related"))}">
+            <div class="finding-topline">
+              <strong>${escapeHtml(node.role)}</strong>
+              <span class="mini-pill">${escapeHtml(String(node.kind || "related"))}</span>
+            </div>
+            <p>${escapeHtml(trimPathLabel(node.label))}</p>
+            <div class="finding-meta">${outgoing || '<span class="mini-pill">leaf</span>'}</div>
+          </article>
+        `;
+      })
+      .join("");
+  }
+
+  function trimPathLabel(filePath) {
+    const parts = String(filePath || "").split(/[\\/]/).filter(Boolean);
+    if (parts.length <= 2) {
+      return String(filePath || "");
+    }
+    return `${parts.slice(-2).join("/")}`;
   }
 
   function updateSignalChart(entries, selectedEntry) {

@@ -337,6 +337,12 @@ suite('V3 Runtime Test Suite', () => {
 		assert.ok(kinds.includes('checkpoint'), 'Missing checkpoint item');
 		assert.ok(kinds.includes('runtimeEvent'), 'Missing runtimeEvent item');
 		assert.ok(kinds.includes('incidentUpdate'), 'Missing incidentUpdate item');
+
+		const runtimeTimelineItem = items.find((item) => item.kind === 'runtimeEvent');
+		assert.ok(runtimeTimelineItem && runtimeTimelineItem.kind === 'runtimeEvent');
+		if (runtimeTimelineItem && runtimeTimelineItem.kind === 'runtimeEvent') {
+			assert.strictEqual(runtimeTimelineItem.eventType, 'RuntimeError');
+		}
 	});
 
 	// ------------------------------------------------------------------------
@@ -358,5 +364,76 @@ suite('V3 Runtime Test Suite', () => {
 		assert.ok(result.analysis.includes('State changed from NORMAL to WARNING'));
 		// V3 fields should still be present
 		assert.ok(Array.isArray(result.runtimeEvents));
+	});
+
+	// ------------------------------------------------------------------------
+	// Test 11: RCA candidate set includes related/downstream files
+	// ------------------------------------------------------------------------
+	test('11. RCA evaluates multiple candidate files from graph and incident context', () => {
+		const result = analyzeChange(
+			{
+				filePath: '/tmp/example.ts',
+				language: 'typescript',
+				timestamp: '2026-04-17T10:00:30.000Z',
+				previousCode: 'function run(v?: string) {\n  if (!v) return;\n  return v.trim();\n}\n',
+				currentCode: 'function run(v?: string) {\n  return v.trim();\n}\n',
+			},
+			{
+				existingIncidents: [
+					makeIncident({
+						id: 'incident-downstream',
+						impactedFiles: ['/tmp/downstream.ts'],
+						relatedFiles: ['/tmp/worker.ts'],
+						status: 'open',
+					}),
+				],
+				graph: {
+					imports: {
+						'/tmp/downstream.ts': ['/tmp/example.ts'],
+					},
+					exports: {},
+					exportSignatures: {},
+				},
+				recentSaves: {
+					'/tmp/example.ts': new Date('2026-04-17T10:00:00.000Z').getTime(),
+					'/tmp/downstream.ts': new Date('2026-04-17T10:00:10.000Z').getTime(),
+				},
+				workspaceRoot: '/tmp',
+			},
+		);
+
+		assert.ok(result.probableRootCauses.length >= 2, 'Expected RCA to include multiple candidate files');
+		assert.ok(
+			result.probableRootCauses.some((candidate) => candidate.filePath === '/tmp/downstream.ts'),
+			`Expected downstream candidate in RCA set. Got: ${JSON.stringify(result.probableRootCauses.map((c) => c.filePath))}`,
+		);
+	});
+
+	// ------------------------------------------------------------------------
+	// Test 12: Weak-evidence candidates are confidence-calibrated
+	// ------------------------------------------------------------------------
+	test('12. RCA calibrates confidence when evidence is weak', () => {
+		const result = analyzeChange(
+			{
+				filePath: '/tmp/example.ts',
+				language: 'typescript',
+				timestamp: '2026-04-17T10:00:30.000Z',
+				previousCode: 'const value = 1;\n',
+				currentCode: 'const value = 1;\n',
+				previousState: 'NORMAL',
+			},
+			{
+				existingIncidents: [],
+				graph: { imports: {}, exports: {}, exportSignatures: {} },
+				recentSaves: {},
+				workspaceRoot: '/tmp',
+			},
+		);
+
+		assert.ok(result.probableRootCauses.length > 0, 'Expected at least one RCA candidate');
+		assert.ok(
+			result.probableRootCauses[0].confidence <= 0.5,
+			`Expected weak-evidence confidence calibration. Got: ${result.probableRootCauses[0].confidence}`,
+		);
 	});
 });

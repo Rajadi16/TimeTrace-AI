@@ -97,17 +97,42 @@ export function analyzeChange(
 		return event;
 	});
 
-	const probableRootCauses = rankRootCauses([
-		{
-			filePath: input.filePath,
-			findings,
-			allFindings: findings,
-			downstreamFiles: computeDirectDownstream(graph, input.filePath),
-			saveTimestamp: saveTs,
-			recentSaves,
-			runtimeEvents: correlatedRuntimeEvents,
-		},
+	const activeIncidents = (context?.existingIncidents ?? []).filter((incident) => incident.status !== 'resolved');
+	const incidentFiles = activeIncidents.flatMap((incident) => [
+		...incident.impactedFiles,
+		...incident.relatedFiles,
 	]);
+
+	const candidateFilePaths = [
+		input.filePath,
+		...impactedFiles,
+		...relatedFiles,
+		...computeDirectDownstream(graph, input.filePath),
+		...incidentFiles,
+	].filter(Boolean);
+
+	const uniqueCandidateFilePaths = [...new Set(candidateFilePaths)].slice(0, 14);
+
+	const probableRootCauses = rankRootCauses(
+		uniqueCandidateFilePaths.map((candidatePath) => {
+			const findingsForCandidate = findings.filter((finding) => finding.filePath === candidatePath);
+			const runtimeForCandidate = correlatedRuntimeEvents.filter((event) => event.filePath === candidatePath);
+			const activeIncidentCount = activeIncidents.filter(
+				(incident) => incident.impactedFiles.includes(candidatePath) || incident.relatedFiles.includes(candidatePath),
+			).length;
+
+			return {
+				filePath: candidatePath,
+				findings: findingsForCandidate,
+				allFindings: findings,
+				downstreamFiles: computeDirectDownstream(graph, candidatePath),
+				saveTimestamp: saveTs,
+				recentSaves,
+				runtimeEvents: runtimeForCandidate,
+				activeIncidentCount,
+			};
+		}),
+	);
 
 	// -------------------------------------------------------------------------
 	// Step 6: Open/update/resolve incidents (V3: with runtime event linking)
