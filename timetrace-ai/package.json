@@ -10,10 +10,7 @@
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished",
-    "onCommand:timetrace-ai.openSidebar",
-    "onCommand:timetrace-ai.analyzeCurrentDocument",
-    "onCommand:timetrace-ai.showLatestAnalysis"
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -36,10 +33,6 @@
       ]
     },
     "commands": [
-      {
-        "command": "timetrace-ai.helloWorld",
-        "title": "Hello World"
-      },
       {
         "command": "timetrace-ai.openSidebar",
         "title": "TimeTrace AI: Focus Sidebar"

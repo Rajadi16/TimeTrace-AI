@@ -149,9 +149,6 @@ export function activate(context: vscode.ExtensionContext) {
 		syncSidebarForDocument(editor?.document);
 	}));
 
-	const helloWorldCommand = vscode.commands.registerCommand('timetrace-ai.helloWorld', () => {
-		void vscode.window.showInformationMessage('Hello World from timetrace-ai!');
-	});
 
 	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', () => {
 		const editor = vscode.window.activeTextEditor;
@@ -187,7 +184,7 @@ export function activate(context: vscode.ExtensionContext) {
 		void vscode.window.showInformationMessage(`Latest TimeTrace AI result for ${editor.document.fileName} is available in the output channel.`);
 	});
 
-	context.subscriptions.push(helloWorldCommand, analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
+	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
 	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
 	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
 	console.log('TimeTrace AI extension activated.');
