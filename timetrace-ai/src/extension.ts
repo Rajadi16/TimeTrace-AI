@@ -7,10 +7,15 @@ import {
 } from './ai/snapshotStore';
 import { emptyGraph, updateGraphForFile, type WorkspaceGraph } from './ai/dependencyGraph';
 import type { TimeTraceAnalysisResult } from './ai';
+import { RuntimeStore } from './ai/runtimeStore';
+import { ingestRuntimeEvent } from './ai/runtimeIngestion';
+import type { RuntimeEvent, RawRuntimeInput } from './ai';
 
 interface SidebarTimelinePayload {
 	filePath: string;
 	timelineHistory: TimelineCheckpointRecord[];
+	/** V3: Canonical unified timeline, ready for UI rendering */
+	timelineItems?: import('./ai').TimelineItem[];
 }
 
 interface SidebarAnalysisPayload extends TimeTraceAnalysisResult {
@@ -62,15 +67,21 @@ function buildTimelineCheckpointRecord(
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
 	const snapshotStore = new SnapshotStore(context.workspaceState);
+	const runtimeStore = new RuntimeStore(context.workspaceState);
 	const provider = new TimeTraceSidebarProvider(context.extensionUri);
 
 	// Determine workspace root for import resolution
 	const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
 	function publishTimelineForFile(filePath: string): void {
+		const timelineHistory = snapshotStore.getTimelineHistory(filePath);
+		const latest = snapshotStore.getLatestAnalysis(filePath);
+		const timelineItems = latest?.result.timelineItems;
+
 		provider.publishTimeline({
 			filePath,
-			timelineHistory: snapshotStore.getTimelineHistory(filePath),
+			timelineHistory,
+			timelineItems,
 		});
 	}
 
@@ -159,6 +170,10 @@ export function activate(context: vscode.ExtensionContext) {
 		const graph = await rebuildWorkspaceGraph(document, currentCode);
 		snapshotStore.saveWorkspaceGraph(graph);
 
+		// Gather V3 runtime context
+		const runtimeEvents = runtimeStore.getEventsByFile(document.uri.fsPath);
+		const persistedCheckpoints = snapshotStore.getTimelineHistory(document.uri.fsPath);
+
 		// Run the full 6-step analysis pipeline
 		const result = runTimeTraceAnalysis(
 			{
@@ -174,6 +189,9 @@ export function activate(context: vscode.ExtensionContext) {
 				graph,
 				recentSaves: snapshotStore.getRecentSaves(),
 				workspaceRoot,
+				runtimeEvents,
+				recentCheckpoints: persistedCheckpoints,
+				persistedCheckpoints,
 			},
 		);
 
@@ -194,6 +212,11 @@ export function activate(context: vscode.ExtensionContext) {
 			findings: result.findings,
 		});
 		snapshotStore.saveIncidents(result.incidents);
+
+		// V3: Persist enriched runtime events back to store
+		if (result.runtimeEvents.length > 0) {
+			runtimeStore.saveRuntimeEvents(result.runtimeEvents);
+		}
 
 		if (result.checkpoint) {
 			snapshotStore.saveTimelineCheckpoint(
@@ -276,7 +299,46 @@ export function activate(context: vscode.ExtensionContext) {
 		void vscode.window.showInformationMessage(`Latest TimeTrace AI result for ${editor.document.fileName} is available in the output channel.`);
 	});
 
-	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
+	/**
+	 * V3: Inject a test runtime event for demonstration/testing.
+	 * In a real scenario, runtime events would be captured from the running application
+	 * via event listeners, debugger integration, or runtime instrumentation.
+	 */
+	const injectTestRuntimeEventCommand = vscode.commands.registerCommand('timetrace-ai.injectTestRuntimeEvent', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			void vscode.window.showWarningMessage('Open a file first.');
+			return;
+		}
+
+		// Create a test runtime error event
+		const testEvent: RawRuntimeInput = {
+			type: 'RuntimeError',
+			error: new Error('Test runtime error: Null pointer exception in handler'),
+			filePath: editor.document.uri.fsPath,
+			line: 42,
+			column: 15,
+			timestamp: new Date().toISOString(),
+		};
+
+		try {
+			const normalizedEvent = ingestRuntimeEvent(testEvent);
+			runtimeStore.saveRuntimeEvent(normalizedEvent);
+
+			outputChannel.appendLine(`[V3] Injected test runtime event: ${normalizedEvent.id}`);
+			void vscode.window.showInformationMessage(
+				`Test runtime event injected. Save the file to trigger re-analysis with the new runtime data.`,
+			);
+
+			// Auto-trigger re-analysis on the current document
+			await analyzeDocument(editor.document);
+		} catch (error) {
+			outputChannel.appendLine(`[V3] Error injecting runtime event: ${error}`);
+			void vscode.window.showErrorMessage(`Failed to inject runtime event: ${error}`);
+		}
+	});
+
+	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand, injectTestRuntimeEventCommand);
 	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
 	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
 	console.log('TimeTrace AI extension activated.');
