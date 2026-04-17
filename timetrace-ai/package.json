@@ -3,14 +3,24 @@
   "displayName": "timetrace-ai",
   "description": "TimeTrace AI is a VS Code extension that rewinds code execution states to help developers understand how errors evolve over time. It provides an interactive timeline, highlights impacted code, and identifies root causes for faster debugging.",
   "version": "0.0.1",
+  "publisher": "CodeOfDuty",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Rajadi16/TimeTrace-AI.git"
+  },
+  "license": "MIT",
   "engines": {
-    "vscode": "^1.114.0"
+    "vscode": "^1.116.0"
   },
   "categories": [
     "Other"
   ],
   "activationEvents": [
-    "onStartupFinished"
+    "onView:timetraceAi.sidebar",
+    "onCommand:timetrace-ai.openSidebar",
+    "onCommand:timetrace-ai.analyzeCurrentDocument",
+    "onCommand:timetrace-ai.showLatestAnalysis",
+    "onCommand:timetrace-ai.injectTestRuntimeEvent"
   ],
   "main": "./out/extension.js",
   "contributes": {
