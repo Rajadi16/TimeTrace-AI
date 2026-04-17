@@ -2,6 +2,7 @@ import { buildAnalysisSummary } from './analysisGenerator';
 import { classifyFeatures } from './classifier';
 import { computeChangedLineRanges } from './changeDetector';
 import { extractFeatures } from './featureExtractor';
+import { buildStructuredAnalysisArtifacts } from './structuredAnalysis';
 import type { AnalyzeChangeInput, AnalyzeChangeOutput, AnalysisState } from './types';
 
 function normalizeState(previousState?: AnalysisState): AnalysisState {
@@ -29,6 +30,19 @@ export function analyzeChange(input: AnalyzeChangeInput): AnalyzeChangeOutput {
 		reasons: classification.reasons,
 		score: classification.score,
 	});
+	const structuredArtifacts = buildStructuredAnalysisArtifacts({
+		filePath: input.filePath,
+		timestamp: input.timestamp,
+		state: classification.state,
+		score: classification.score,
+		checkpoint,
+		previousState,
+		reasons: classification.reasons,
+		analysis,
+		features,
+		changedLineRanges,
+		currentCode: input.currentCode,
+	});
 
 	return {
 		state: classification.state,
@@ -40,5 +54,6 @@ export function analyzeChange(input: AnalyzeChangeInput): AnalyzeChangeOutput {
 		analysis,
 		features,
 		changedLineRanges,
+		...structuredArtifacts,
 	};
 }

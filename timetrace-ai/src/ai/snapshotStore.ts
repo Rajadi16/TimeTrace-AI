@@ -34,6 +34,11 @@ export interface TimelineCheckpointRecord {
 	changedLineRanges: number[][];
 	features: TimeTraceAnalysisResult['features'];
 	codePreview: CodePreviewRecord;
+	findings?: TimeTraceAnalysisResult['findings'];
+	probableRootCauses?: TimeTraceAnalysisResult['probableRootCauses'];
+	relatedFiles?: TimeTraceAnalysisResult['relatedFiles'];
+	impactedFiles?: TimeTraceAnalysisResult['impactedFiles'];
+	incidents?: TimeTraceAnalysisResult['incidents'];
 }
 
 export class SnapshotStore {
