@@ -120,6 +120,32 @@ body.typography-elegant .code-window {
   color: var(--text-muted);
 }
 
+.timeline-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.timeline-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  font-size: 0.64rem;
+  color: var(--text-muted);
+}
+
+.timeline-empty {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent), transparent 72%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg), black 14%);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
 .hero {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -311,6 +337,61 @@ select {
 .card:hover {
   transform: translateY(-1px) scale(1.006);
   border-color: color-mix(in srgb, var(--accent), transparent 72%);
+}
+
+.checkpoint-strip {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 62%);
+  background: color-mix(in srgb, var(--accent), transparent 88%);
+  color: var(--text);
+  font-size: 0.64rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+}
+
+.state-badge.normal { color: var(--ok); }
+.state-badge.warning { color: var(--warn); }
+.state-badge.error { color: var(--danger); }
+
+.checkpoint-timestamp {
+  color: var(--text-muted);
+  font-size: 0.64rem;
+}
+
+.code-impact {
+  margin: 4px 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.impact-chip {
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-muted);
+  font-size: 0.62rem;
+}
+
+.impact-chip.active {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger), transparent 60%);
+  background: rgba(255, 84, 99, 0.12);
+  box-shadow: 0 0 10px rgba(255, 84, 99, 0.16);
 }
 
 .metrics {
