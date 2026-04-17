@@ -1,12 +1,48 @@
 import * as vscode from 'vscode';
 import { runTimeTraceAnalysis } from './ai/runTimeTraceAnalysis';
 import { SnapshotStore } from './ai/snapshotStore';
+import { buildWorkspaceDependencyGraph } from './ai/workspaceGraph';
+import type { WorkspaceFileSnapshot } from './ai/types';
 
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
 	const snapshotStore = new SnapshotStore(context.globalState);
 
-	function analyzeDocument(document: vscode.TextDocument) {
+	async function collectWorkspaceFiles(activeDocument: vscode.TextDocument): Promise<WorkspaceFileSnapshot[]> {
+		const uriSet = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx}', '**/{node_modules,out,dist,.git}/**', 300);
+		const snapshots: WorkspaceFileSnapshot[] = [];
+
+		for (const uri of uriSet) {
+			try {
+				const bytes = await vscode.workspace.fs.readFile(uri);
+				const code = Buffer.from(bytes).toString('utf8');
+				snapshots.push({
+					filePath: uri.fsPath,
+					language: uri.fsPath.endsWith('.tsx') ? 'typescriptreact' : uri.fsPath.endsWith('.ts') ? 'typescript' : uri.fsPath.endsWith('.jsx') ? 'javascriptreact' : 'javascript',
+					code,
+				});
+			} catch {
+				// Ignore unreadable files to keep analysis responsive.
+			}
+		}
+
+		const activeIndex = snapshots.findIndex((file) => file.filePath === activeDocument.uri.fsPath);
+		const activeSnapshot: WorkspaceFileSnapshot = {
+			filePath: activeDocument.uri.fsPath,
+			language: activeDocument.languageId,
+			code: activeDocument.getText(),
+		};
+
+		if (activeIndex >= 0) {
+			snapshots[activeIndex] = activeSnapshot;
+		} else {
+			snapshots.push(activeSnapshot);
+		}
+
+		return snapshots;
+	}
+
+	async function analyzeDocument(document: vscode.TextDocument) {
 		if (document.isUntitled || document.uri.scheme !== 'file') {
 			return undefined;
 		}
@@ -32,6 +68,9 @@ export function activate(context: vscode.ExtensionContext) {
 			previousCode: previousSnapshot.code,
 			currentCode,
 			previousState: previousSnapshot.state,
+			workspaceGraph: buildWorkspaceDependencyGraph(await collectWorkspaceFiles(document), new Date().toISOString()),
+			knownAnalysesByFile: snapshotStore.getAllLatestAnalyses(),
+			existingIncidents: snapshotStore.getIncidents(),
 		});
 
 		snapshotStore.saveSnapshot({
@@ -46,6 +85,19 @@ export function activate(context: vscode.ExtensionContext) {
 			timestamp: new Date().toISOString(),
 			result,
 		});
+		snapshotStore.saveIncidents(result.incidents);
+
+		if (result.checkpoint) {
+			snapshotStore.appendCheckpoint({
+				checkpointId: result.checkpointId,
+				filePath: document.uri.fsPath,
+				timestamp: new Date().toISOString(),
+				state: result.state,
+				summary: result.analysis,
+				findingIds: result.findings.map((finding) => finding.id),
+				relatedFiles: result.relatedFiles,
+			});
+		}
 
 		outputChannel.appendLine(JSON.stringify(result, null, 2));
 		vscode.window.setStatusBarMessage(`TimeTrace AI: ${result.state} (${result.score})`, 4000);
@@ -57,21 +109,21 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(outputChannel);
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
-		analyzeDocument(document);
+		void analyzeDocument(document);
 	}));
 
 	const helloWorldCommand = vscode.commands.registerCommand('timetrace-ai.helloWorld', () => {
 		void vscode.window.showInformationMessage('Hello World from timetrace-ai!');
 	});
 
-	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', () => {
+	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', async () => {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			void vscode.window.showWarningMessage('Open a file first to analyze it.');
 			return;
 		}
 
-		const result = analyzeDocument(editor.document);
+		const result = await analyzeDocument(editor.document);
 		if (!result) {
 			void vscode.window.showInformationMessage('Baseline snapshot captured. Edit and save the file again to trigger analysis.');
 			return;

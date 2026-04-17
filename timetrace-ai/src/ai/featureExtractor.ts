@@ -19,6 +19,8 @@ const GUARD_PATTERNS = [
 const TRY_CATCH_PATTERN = /\btry\b[\s\S]*?\bcatch\b/g;
 const LOOP_PATTERN = /\b(for|while|do)\b|\.forEach\s*\(|\.map\s*\(|\.filter\s*\(/g;
 const TODO_PATTERN = /\b(TODO|FIXME|HACK)\b/gi;
+const OPTIONAL_CHAIN_PATTERN = /\?\./g;
+const FALLBACK_PATTERN = /\?\?|\|\|/g;
 
 function countMatches(code: string, pattern: RegExp): number {
 	const flags = pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`;
@@ -176,6 +178,8 @@ export function extractFeatures(input: {
 	const previousMetrics = {
 		complexity: estimateComplexity(input.previousCode),
 		guardCount: GUARD_PATTERNS.reduce((total, pattern) => total + countMatches(input.previousCode, pattern), 0),
+		optionalChainCount: countMatches(input.previousCode, OPTIONAL_CHAIN_PATTERN),
+		fallbackCount: countMatches(input.previousCode, FALLBACK_PATTERN),
 		tryCatchCount: countMatches(input.previousCode, TRY_CATCH_PATTERN),
 		loopCount: countMatches(input.previousCode, LOOP_PATTERN),
 		todoCommentCount: countMatches(input.previousCode, TODO_PATTERN),
@@ -184,6 +188,8 @@ export function extractFeatures(input: {
 	const currentMetrics = {
 		complexity: estimateComplexity(input.currentCode),
 		guardCount: GUARD_PATTERNS.reduce((total, pattern) => total + countMatches(input.currentCode, pattern), 0),
+		optionalChainCount: countMatches(input.currentCode, OPTIONAL_CHAIN_PATTERN),
+		fallbackCount: countMatches(input.currentCode, FALLBACK_PATTERN),
 		tryCatchCount: countMatches(input.currentCode, TRY_CATCH_PATTERN),
 		loopCount: countMatches(input.currentCode, LOOP_PATTERN),
 		todoCommentCount: countMatches(input.currentCode, TODO_PATTERN),
@@ -193,10 +199,13 @@ export function extractFeatures(input: {
 		syntaxFailure: detectSyntaxFailure(input.language, input.currentCode),
 		undefinedIdentifierDetected: detectUndefinedIdentifiers(input.language, input.currentCode),
 		nullCheckRemoved: previousMetrics.guardCount > currentMetrics.guardCount,
+		optionalChainingRemoved: previousMetrics.optionalChainCount > currentMetrics.optionalChainCount,
+		fallbackRemoved: previousMetrics.fallbackCount > currentMetrics.fallbackCount,
 		tryCatchRemoved: previousMetrics.tryCatchCount > currentMetrics.tryCatchCount,
 		heavyLoopAdded: currentMetrics.loopCount > previousMetrics.loopCount,
 		complexityDelta: Math.max(0, currentMetrics.complexity - previousMetrics.complexity),
 		todoHackCommentAdded: currentMetrics.todoCommentCount > previousMetrics.todoCommentCount,
+		exportSignatureChanged: false,
 		currentMetrics,
 		previousMetrics,
 	};

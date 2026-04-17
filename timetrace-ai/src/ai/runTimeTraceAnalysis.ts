@@ -1,5 +1,6 @@
 import { analyzeChange } from './analyzeChange';
-import type { AnalyzeChangeInput, AnalysisState, FeatureSet } from './types';
+import { updateIncidents } from './incidentEngine';
+import type { AnalyzeChangeInput, AnalysisState, FeatureSet, Finding, Incident, RootCauseCandidate } from './types';
 
 /**
  * Canonical UI/integration entrypoint.
@@ -23,9 +24,12 @@ import type { AnalyzeChangeInput, AnalysisState, FeatureSet } from './types';
  */
 export interface TimeTraceAnalysisInput extends AnalyzeChangeInput {
 	previousState?: AnalysisState;
+	existingIncidents?: Incident[];
 }
 
 export interface TimeTraceAnalysisResult {
+	schemaVersion: '2.0';
+	checkpointId: string;
 	state: AnalysisState;
 	score: number;
 	checkpoint: boolean;
@@ -34,9 +38,18 @@ export interface TimeTraceAnalysisResult {
 	analysis: string;
 	changedLineRanges: number[][];
 	features: FeatureSet;
+	findings: Finding[];
+	impactedFiles: string[];
+	relatedFiles: string[];
+	probableRootCauses: RootCauseCandidate[];
+	incidents: Incident[];
 }
 
 export function runTimeTraceAnalysis(input: TimeTraceAnalysisInput): TimeTraceAnalysisResult {
-	const { confidence: _confidence, ...uiResult } = analyzeChange(input);
-	return uiResult;
+	const { confidence: _confidence, ...analysis } = analyzeChange(input);
+	const incidents = updateIncidents(input.existingIncidents ?? [], analysis);
+	return {
+		...analysis,
+		incidents,
+	};
 }
