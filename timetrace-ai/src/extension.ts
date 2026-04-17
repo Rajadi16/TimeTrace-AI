@@ -1,27 +1,18 @@
 import * as vscode from 'vscode';
 import { runTimeTraceAnalysis } from './ai/runTimeTraceAnalysis';
-import { SnapshotStore } from './ai/snapshotStore';
+import {
+	SnapshotStore,
+	type CodePreviewRecord,
+	type TimelineCheckpointRecord,
+} from './ai/snapshotStore';
 import type { TimeTraceAnalysisResult } from './ai';
 
-interface SidebarAnalysisPayload {
+interface SidebarTimelinePayload {
 	filePath: string;
-	timestamp: string;
-	state: TimeTraceAnalysisResult['state'];
-	score: number;
-	checkpoint: boolean;
-	previousState: TimeTraceAnalysisResult['previousState'];
-	reasons: string[];
-	analysis: string;
-	changedLineRanges: number[][];
-	features: TimeTraceAnalysisResult['features'];
-	codePreview: {
-		before: string[];
-		after: string[];
-		focusLine: number;
-	};
+	timelineHistory: TimelineCheckpointRecord[];
 }
 
-function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): SidebarAnalysisPayload['codePreview'] {
+function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): CodePreviewRecord {
 	const previousLines = previousCode.split(/\r?\n/);
 	const currentLines = currentCode.split(/\r?\n/);
 	const firstRange = changedLineRanges[0] ?? [1, 1];
@@ -37,16 +28,57 @@ function buildCodePreview(previousCode: string, currentCode: string, changedLine
 	};
 }
 
+function buildTimelineCheckpointRecord(
+	filePath: string,
+	timestamp: string,
+	result: TimeTraceAnalysisResult,
+	codePreview: CodePreviewRecord,
+): TimelineCheckpointRecord {
+	return {
+		filePath,
+		timestamp,
+		state: result.state,
+		score: result.score,
+		checkpoint: result.checkpoint,
+		previousState: result.previousState,
+		reasons: result.reasons,
+		analysis: result.analysis,
+		changedLineRanges: result.changedLineRanges,
+		features: result.features,
+		codePreview,
+	};
+}
+
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
 	const snapshotStore = new SnapshotStore(context.globalState);
 	const provider = new TimeTraceSidebarProvider(context.extensionUri);
+
+	function publishTimelineForFile(filePath: string): void {
+		provider.publishTimeline({
+			filePath,
+			timelineHistory: snapshotStore.getTimelineHistory(filePath),
+		});
+	}
+
+	function syncSidebarForDocument(document?: vscode.TextDocument): void {
+		if (!document || document.isUntitled || document.uri.scheme !== 'file') {
+			provider.publishTimeline({
+				filePath: '',
+				timelineHistory: [],
+			});
+			return;
+		}
+
+		publishTimelineForFile(document.uri.fsPath);
+	}
 
 	function analyzeDocument(document: vscode.TextDocument) {
 		if (document.isUntitled || document.uri.scheme !== 'file') {
 			return undefined;
 		}
 
+		const timestamp = new Date().toISOString();
 		const previousSnapshot = snapshotStore.getSnapshot(document.uri.fsPath);
 		const currentCode = document.getText();
 
@@ -54,51 +86,49 @@ export function activate(context: vscode.ExtensionContext) {
 			snapshotStore.saveSnapshot({
 				filePath: document.uri.fsPath,
 				language: document.languageId,
-				timestamp: new Date().toISOString(),
+				timestamp,
 				code: currentCode,
 			});
 			outputChannel.appendLine(`[baseline] Stored snapshot for ${document.uri.fsPath}`);
+			publishTimelineForFile(document.uri.fsPath);
 			return undefined;
 		}
 
 		const result = runTimeTraceAnalysis({
 			filePath: document.uri.fsPath,
 			language: document.languageId,
-			timestamp: new Date().toISOString(),
+			timestamp,
 			previousCode: previousSnapshot.code,
 			currentCode,
 			previousState: previousSnapshot.state,
 		});
+		const codePreview = buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges);
 
 		snapshotStore.saveSnapshot({
 			filePath: document.uri.fsPath,
 			language: document.languageId,
-			timestamp: new Date().toISOString(),
+			timestamp,
 			code: currentCode,
 			state: result.state,
 		});
 		snapshotStore.saveLatestAnalysis({
 			filePath: document.uri.fsPath,
-			timestamp: new Date().toISOString(),
+			timestamp,
 			result,
 		});
+		if (result.checkpoint) {
+			snapshotStore.saveTimelineCheckpoint(
+				buildTimelineCheckpointRecord(document.uri.fsPath, timestamp, result, codePreview),
+			);
+		}
 
 		outputChannel.appendLine(JSON.stringify(result, null, 2));
 		vscode.window.setStatusBarMessage(`TimeTrace AI: ${result.state} (${result.score})`, 4000);
-		provider.publishAnalysis({
-			filePath: document.uri.fsPath,
-			timestamp: new Date().toISOString(),
-			state: result.state,
-			score: result.score,
-			checkpoint: result.checkpoint,
-			previousState: result.previousState,
-			reasons: result.reasons,
-			analysis: result.analysis,
-			changedLineRanges: result.changedLineRanges,
-			features: result.features,
-			codePreview: buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges),
-		});
+		publishTimelineForFile(document.uri.fsPath);
 		if (result.checkpoint) {
+			outputChannel.appendLine(
+				`[checkpoint] ${document.uri.fsPath} ${result.previousState} -> ${result.state}`,
+			);
 			void vscode.window.showInformationMessage(`TimeTrace AI checkpoint: ${result.analysis}`);
 		}
 		return result;
@@ -114,6 +144,9 @@ export function activate(context: vscode.ExtensionContext) {
 	);
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
 		analyzeDocument(document);
+	}));
+	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
+		syncSidebarForDocument(editor?.document);
 	}));
 
 	const helloWorldCommand = vscode.commands.registerCommand('timetrace-ai.helloWorld', () => {
@@ -155,7 +188,8 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(helloWorldCommand, analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
-	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate a checkpoint.');
+	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
+	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
 	console.log('TimeTrace AI extension activated.');
 }
 
@@ -164,18 +198,21 @@ export function deactivate() {}
 class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'timetraceAi.sidebar';
 	private webviewView: vscode.WebviewView | undefined;
+	private lastMessage:
+		| {
+				type: 'historyUpdate';
+				payload: SidebarTimelinePayload;
+		  }
+		| undefined;
 
 	public constructor(private readonly extensionUri: vscode.Uri) {}
 
-	public publishAnalysis(payload: SidebarAnalysisPayload): void {
-		if (!this.webviewView) {
-			return;
-		}
-
-		void this.webviewView.webview.postMessage({
-			type: 'analysisResult',
+	public publishTimeline(payload: SidebarTimelinePayload): void {
+		this.lastMessage = {
+			type: 'historyUpdate',
 			payload,
-		});
+		};
+		this.postLastMessage();
 	}
 
 	public resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -187,12 +224,21 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		};
 
 		webview.html = this.getHtml(webview);
+		this.postLastMessage();
 
 		webview.onDidReceiveMessage((message: { type?: string }) => {
 			if (message.type === 'jumpToRootCause') {
 				void vscode.window.showInformationMessage('Focused root-cause evidence for the selected failure state.');
 			}
 		});
+	}
+
+	private postLastMessage(): void {
+		if (!this.webviewView || !this.lastMessage) {
+			return;
+		}
+
+		void this.webviewView.webview.postMessage(this.lastMessage);
 	}
 
 	private getHtml(webview: vscode.Webview): string {
