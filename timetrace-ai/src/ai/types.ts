@@ -53,30 +53,17 @@ export interface Incident {
 	impactedFiles: string[];
 	/** Files contextually tied to this analysis/incident */
 	relatedFiles: string[];
+	// ---- V3 runtime-awareness fields ----
 	/** Runtime event ids linked to this incident */
 	runtimeEventIds?: string[];
-	/** True if runtime evidence confirms this incident */
+	/** True if any runtime event has confirmed this incident */
 	runtimeConfirmed?: boolean;
-	/** ISO timestamp of the latest linked runtime event */
+	/** ISO timestamp of the most recent linked runtime event */
 	lastRuntimeEventAt?: string;
-	/** Count of linked runtime signals */
+	/** Count of linked runtime events */
 	runtimeEvidenceCount?: number;
 }
 
-export interface RuntimeEvent {
-	id: string;
-	type: string;
-	message: string;
-	timestamp: string;
-	severity: 'warning' | 'error';
-	filePath?: string;
-	line?: number;
-	functionName?: string;
-	relatedCheckpointId?: string;
-	relatedIncidentId?: string;
-	relatedFindingIds?: string[];
-	evidence?: string[];
-}
 
 // ---------------------------------------------------------------------------
 // RootCauseCandidate — ranked, not certain
@@ -152,5 +139,6 @@ export interface AnalyzeChangeOutput {
 	incidents: Incident[];
 	impactedFiles: string[];
 	relatedFiles: string[];
-	runtimeEvents: RuntimeEvent[];
+	/** V3: runtime events (possibly enriched with correlation linkage) */
+	runtimeEvents?: import('./runtimeTypes').RuntimeEvent[];
 }

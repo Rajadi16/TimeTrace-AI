@@ -1,7 +1,9 @@
 import type { Finding, FindingKind, Incident, IncidentStatus } from './types';
+import type { RuntimeEvent } from './runtimeTypes';
+import { correlateRuntimeEventToIncident } from './runtimeCorrelation';
 
 // ---------------------------------------------------------------------------
-// Incident matching — compare by filePath + findingKind
+// Incident matching — compare by filePath + findingKind (internally used)
 // ---------------------------------------------------------------------------
 
 function incidentKey(filePath: string, kinds: FindingKind[]): string {
@@ -14,7 +16,69 @@ function getIncidentKinds(incident: Incident, allFindings: Finding[]): FindingKi
 }
 
 // ---------------------------------------------------------------------------
-// Lifecycle
+// V3: Apply runtime event links to incidents
+// ---------------------------------------------------------------------------
+
+function applyRuntimeEventsToIncidents(
+	incidents: Incident[],
+	runtimeEvents: RuntimeEvent[],
+	allFindings: Finding[],
+): { incidents: Incident[]; enrichedEvents: RuntimeEvent[] } {
+	const enrichedEvents: RuntimeEvent[] = [];
+
+	// We mutate a copy of incidents
+	const incidentMap = new Map<string, Incident>(incidents.map((i) => [i.id, { ...i }]));
+
+	for (const event of runtimeEvents) {
+		const { relatedIncidentId, relatedFindingIds, evidence, shouldConfirmIncident } =
+			correlateRuntimeEventToIncident(event, [...incidentMap.values()], allFindings);
+
+		if (!relatedIncidentId) {
+			enrichedEvents.push(event);
+			continue;
+		}
+
+		const incident = incidentMap.get(relatedIncidentId);
+		if (!incident) {
+			enrichedEvents.push(event);
+			continue;
+		}
+
+		// Enrich incident
+		const existingRuntimeIds = incident.runtimeEventIds ?? [];
+		if (!existingRuntimeIds.includes(event.id)) {
+			existingRuntimeIds.push(event.id);
+		}
+
+		incidentMap.set(relatedIncidentId, {
+			...incident,
+			runtimeEventIds: existingRuntimeIds,
+			runtimeConfirmed: incident.runtimeConfirmed || shouldConfirmIncident,
+			lastRuntimeEventAt: incident.lastRuntimeEventAt
+				? new Date(incident.lastRuntimeEventAt) > new Date(event.timestamp)
+					? incident.lastRuntimeEventAt
+					: event.timestamp
+				: event.timestamp,
+			runtimeEvidenceCount: (incident.runtimeEvidenceCount ?? 0) + 1,
+		});
+
+		// Enrich event with linkage
+		enrichedEvents.push({
+			...event,
+			relatedIncidentId,
+			relatedFindingIds: [...(event.relatedFindingIds ?? []), ...relatedFindingIds],
+			evidence: [...(event.evidence ?? []), ...evidence],
+		});
+	}
+
+	return {
+		incidents: [...incidentMap.values()],
+		enrichedEvents,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// V2 + V3 lifecycle — main export
 // ---------------------------------------------------------------------------
 
 export function updateIncidents(
@@ -23,8 +87,8 @@ export function updateIncidents(
 	impactedFiles: string[],
 	relatedFiles: string[],
 	timestamp: string,
-	runtimeEvents: Array<{ id: string; filePath?: string; timestamp: string; severity: 'warning' | 'error' }> = [],
-): Incident[] {
+	runtimeEvents: RuntimeEvent[] = [],
+): { incidents: Incident[]; enrichedRuntimeEvents: RuntimeEvent[] } {
 	// Index current findings by id
 	const currentFindingIds = new Set(currentFindings.map((f) => f.id));
 
@@ -36,7 +100,9 @@ export function updateIncidents(
 		findingsByFile.set(f.filePath, existing);
 	}
 
-	// Process existing incidents
+	// -------------------------------------------------------------------------
+	// Step A: Process existing incidents (V2 logic — resolve/mitigate)
+	// -------------------------------------------------------------------------
 	const updatedIncidents: Incident[] = existingIncidents.map((incident): Incident => {
 		if (incident.status === 'resolved') {
 			return incident; // resolved incidents are immutable
@@ -46,7 +112,16 @@ export function updateIncidents(
 		const stillActiveFindingIds = incident.findings.filter((id) => currentFindingIds.has(id));
 
 		if (stillActiveFindingIds.length === 0) {
-			// No active findings → resolve
+			// No active findings — check runtime evidence before resolving
+			const hasRecentRuntime = runtimeEvents.some(
+				(e) => e.relatedIncidentId === incident.id && e.severity === 'error',
+			);
+
+			if (hasRecentRuntime) {
+				// Keep open — runtime still shows errors
+				return { ...incident, updatedAt: timestamp };
+			}
+
 			return {
 				...incident,
 				status: 'resolved',
@@ -67,10 +142,8 @@ export function updateIncidents(
 			'info',
 		);
 
-		// Determine if severity decreased compared to when incident opened
 		const wasError = incident.title.includes('ERROR') || incident.title.includes('error');
 		const mitigated = wasError && maxSeverity === 'warning';
-
 		const newStatus: IncidentStatus = mitigated ? 'mitigated' : incident.status;
 
 		return {
@@ -83,14 +156,15 @@ export function updateIncidents(
 		};
 	});
 
-	// Open new incidents for findings not covered by any existing open/mitigated incident
+	// -------------------------------------------------------------------------
+	// Step B: Open new incidents for uncovered error/warning findings
+	// -------------------------------------------------------------------------
 	const coveredFindingIds = new Set(
 		updatedIncidents
 			.filter((i) => i.status !== 'resolved')
 			.flatMap((i) => i.findings),
 	);
 
-	// Group new uncovered error/warning findings by file
 	const newFindingsByFile = new Map<string, Finding[]>();
 	for (const f of currentFindings) {
 		if (coveredFindingIds.has(f.id) || f.severity === 'info') { continue; }
@@ -117,43 +191,16 @@ export function updateIncidents(
 		});
 	}
 
-	// Link runtime evidence to active incidents using simple file-based matching.
-	if (runtimeEvents.length > 0) {
-		for (let i = 0; i < updatedIncidents.length; i += 1) {
-			const incident = updatedIncidents[i];
-			if (incident.status === 'resolved') {
-				continue;
-			}
+	// -------------------------------------------------------------------------
+	// Step C: Apply runtime event links (V3 — enrich incidents)
+	// -------------------------------------------------------------------------
+	const { incidents: runtimeEnrichedIncidents, enrichedEvents } =
+		runtimeEvents.length > 0
+			? applyRuntimeEventsToIncidents(updatedIncidents, runtimeEvents, currentFindings)
+			: { incidents: updatedIncidents, enrichedEvents: runtimeEvents };
 
-			const linked = runtimeEvents.filter((event) => {
-				if (!event.filePath) {
-					return false;
-				}
-
-				const fileName = event.filePath.split(/[\\/]/).pop() ?? event.filePath;
-				return incident.id.includes(event.filePath)
-					|| incident.title.includes(fileName)
-					|| incident.impactedFiles.includes(event.filePath)
-					|| incident.relatedFiles.includes(event.filePath);
-			});
-
-			if (linked.length === 0) {
-				continue;
-			}
-
-			const latestRuntimeTs = linked
-				.map((event) => new Date(event.timestamp).getTime())
-				.sort((a, b) => b - a)[0];
-
-			updatedIncidents[i] = {
-				...incident,
-				runtimeEventIds: [...new Set([...(incident.runtimeEventIds ?? []), ...linked.map((event) => event.id)])],
-				runtimeConfirmed: linked.some((event) => event.severity === 'error') || incident.runtimeConfirmed,
-				lastRuntimeEventAt: latestRuntimeTs ? new Date(latestRuntimeTs).toISOString() : incident.lastRuntimeEventAt,
-				runtimeEvidenceCount: (incident.runtimeEvidenceCount ?? 0) + linked.length,
-			};
-		}
-	}
-
-	return updatedIncidents;
+	return {
+		incidents: runtimeEnrichedIncidents,
+		enrichedRuntimeEvents: enrichedEvents,
+	};
 }

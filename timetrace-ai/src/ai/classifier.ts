@@ -1,4 +1,6 @@
 import type { AnalysisState, FeatureSet, Finding, RootCauseCandidate } from './types';
+import type { RuntimeEvent } from './runtimeTypes';
+import { computeRuntimeRcaBoosts } from './runtimeCorrelation';
 
 export interface ClassificationResult {
 	state: AnalysisState;
@@ -116,12 +118,8 @@ interface RootCauseInput {
 	downstreamFiles: string[];
 	saveTimestamp: number;
 	recentSaves: Record<string, number>;
-	runtimeEvents?: Array<{
-		filePath?: string;
-		severity: 'warning' | 'error';
-		message: string;
-		functionName?: string;
-	}>;
+	/** Optional runtime events for V3 reranking */
+	runtimeEvents?: RuntimeEvent[];
 }
 
 interface ScoredCandidate {
@@ -131,6 +129,9 @@ interface ScoredCandidate {
 }
 
 export function rankRootCauses(inputs: RootCauseInput[]): RootCauseCandidate[] {
+	const allRuntimeEvents = inputs.flatMap((i) => i.runtimeEvents ?? []);
+	const allFindings = inputs.flatMap((i) => i.allFindings);
+
 	const candidates: ScoredCandidate[] = inputs.map((input): ScoredCandidate => {
 		const signals: string[] = [];
 		let rawScore = 0;
@@ -179,24 +180,13 @@ export function rankRootCauses(inputs: RootCauseInput[]): RootCauseCandidate[] {
 			}
 		}
 
-		// Signal 6: runtime evidence points to the same file
-		const runtimeMatches = (input.runtimeEvents ?? []).filter((event) => event.filePath === input.filePath);
-		if (runtimeMatches.length > 0) {
-			signals.push(`[runtime] ${runtimeMatches.length} runtime signal(s) point to this file`);
-			rawScore += 3 * runtimeMatches.length;
-
-			if (runtimeMatches.some((event) => event.severity === 'error')) {
-				signals.push('[runtime] includes error-severity runtime evidence');
-				rawScore += 2;
-			}
-		}
-
 		return { filePath: input.filePath, rawScore, signals };
 	});
 
 	const maxScore = Math.max(1, ...candidates.map((c) => c.rawScore));
 
-	return candidates
+	// Normalize to 0..1
+	const ranked: RootCauseCandidate[] = candidates
 		.map((c): RootCauseCandidate => ({
 			filePath: c.filePath,
 			relatedSymbol: inputs.find((i) => i.filePath === c.filePath)?.findings[0]?.relatedSymbol,
@@ -204,4 +194,22 @@ export function rankRootCauses(inputs: RootCauseInput[]): RootCauseCandidate[] {
 			signals: c.signals,
 		}))
 		.sort((a, b) => b.confidence - a.confidence);
+
+	// -------------------------------------------------------------------------
+	// V3: Apply runtime RCA boosts
+	// -------------------------------------------------------------------------
+	if (allRuntimeEvents.length > 0) {
+		const boosts = computeRuntimeRcaBoosts(allRuntimeEvents, allFindings);
+		for (const candidate of ranked) {
+			const boost = boosts.find((b) => b.filePath === candidate.filePath);
+			if (boost) {
+				candidate.confidence = Number(Math.min(0.99, candidate.confidence + boost.boost).toFixed(2));
+				candidate.signals.push(...boost.signals.map((s) => `[runtime] ${s}`));
+			}
+		}
+		// Re-sort after boosts
+		ranked.sort((a, b) => b.confidence - a.confidence);
+	}
+
+	return ranked;
 }
