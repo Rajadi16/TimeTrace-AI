@@ -149,9 +149,7 @@
     mode: "demo",
     demoScenarioIndex: 0,
     demoEntries: [],
-    demoTimelineItems: [],
     liveEntries: [],
-    liveTimelineItems: [],
     selectedIndex: 0,
     codeState: "before",
     replayTimer: undefined,
@@ -173,7 +171,6 @@
     });
 
     appState.demoEntries = buildDemoTimeline(demoScenarios[0]);
-    appState.demoTimelineItems = buildFallbackTimelineItems(appState.demoEntries);
     appState.selectedIndex = appState.demoEntries.length - 1;
 
     window.addEventListener("message", (event) => {
@@ -278,17 +275,13 @@
         reasons: Array.isArray(payload.reasons) ? payload.reasons : latestEntry.reasons,
         analysis: payload.analysis || latestEntry.analysis,
         changedLineRanges: Array.isArray(payload.changedLineRanges) ? payload.changedLineRanges : latestEntry.changedLineRanges,
-        findings: Array.isArray(payload.findings) ? payload.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, latestEntry.changedLineRanges || [], latestEntry.reasons || [], latestEntry.filePath || "", latestEntry.timestamp)) : latestEntry.findings,
+        findings: Array.isArray(payload.findings) ? payload.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, latestEntry.changedLineRanges || [], latestEntry.reasons || [])) : latestEntry.findings,
         probableRootCauses: Array.isArray(payload.probableRootCauses) ? payload.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, latestEntry.filePath, latestEntry.findings || [])) : latestEntry.probableRootCauses,
         incidents: Array.isArray(payload.incidents) ? payload.incidents.map((item, incidentIndex) => normalizeIncident(item, incidentIndex, latestEntry.filePath, latestEntry.findings || [], latestEntry.probableRootCauses || [], latestEntry.runtimeEvents || [], latestEntry.score, latestEntry.previousState, latestEntry.state, latestEntry.timestamp, latestEntry.checkpoint, latestEntry.checkpointId)) : latestEntry.incidents,
         runtimeEvents: Array.isArray(payload.runtimeEvents) ? payload.runtimeEvents.map((item, eventIndex) => normalizeRuntimeEvent(item, eventIndex, latestEntry.filePath || "", latestEntry.checkpointId, latestEntry.timestamp, latestEntry.state, latestEntry.checkpoint, latestEntry.findings || [], latestEntry.probableRootCauses || [])) : latestEntry.runtimeEvents,
         relatedFiles: Array.isArray(payload.relatedFiles) ? payload.relatedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.relatedFiles,
         impactedFiles: Array.isArray(payload.impactedFiles) ? payload.impactedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.impactedFiles
       };
-
-      if (Array.isArray(payload.timelineItems)) {
-        appState.liveTimelineItems = normalizeTimelineItems(payload.timelineItems, appState.liveEntries, payload.filePath || latestEntry.filePath);
-      }
 
       appState.selectedIndex = latestIndex;
       appState.codeState = "after";
@@ -308,12 +301,12 @@
 
     appState.mode = "live";
     appState.liveEntries = entries;
-    appState.liveTimelineItems = normalizeTimelineItems(payload.timelineItems, entries, payload.filePath);
     appState.selectedIndex = entries.length - 1;
     appState.codeState = "after";
     appState.sourceLabel = buildSourceLabel(payload.filePath, entries.length);
     appState.replayTimer = clearTimer(appState.replayTimer);
     elements.scenarioRow.classList.add("hidden");
+    appState.activePane = "overview";
     updateView({ animateText: true });
   }
 
@@ -330,142 +323,11 @@
       return rawEntries.map((entry, index) => normalizeEntry(entry, index, payload.filePath));
     }
 
-    if (Array.isArray(payload.timelineItems) && payload.timelineItems.length > 0) {
-      const checkpointItems = payload.timelineItems.filter((item) => item && item.kind === "checkpoint");
-      if (checkpointItems.length > 0) {
-        return checkpointItems.map((item, index) => normalizeEntry({
-          filePath: item.filePath || payload.filePath,
-          timestamp: item.timestamp,
-          state: item.state,
-          previousState: index > 0 ? checkpointItems[index - 1].state : item.state,
-          checkpoint: true,
-          checkpointId: item.checkpointId,
-          analysis: `${item.state} checkpoint`,
-          findings: payload.findings,
-          probableRootCauses: payload.probableRootCauses,
-          incidents: payload.incidents,
-          runtimeEvents: payload.runtimeEvents,
-          relatedFiles: payload.relatedFiles,
-          impactedFiles: payload.impactedFiles,
-          changedLineRanges: payload.changedLineRanges,
-          reasons: payload.reasons,
-          score: payload.score
-        }, index, payload.filePath));
-      }
-    }
-
     if (payload.timestamp || payload.state) {
       return [normalizeEntry(payload, 0, payload.filePath)];
     }
 
     return [];
-  }
-
-  function normalizeTimelineItems(rawItems, entries, fallbackFilePath) {
-    if (!Array.isArray(rawItems) || rawItems.length === 0) {
-      return buildFallbackTimelineItems(entries);
-    }
-
-    const normalized = rawItems
-      .map((item) => normalizeTimelineItem(item, fallbackFilePath))
-      .filter(Boolean)
-      .sort((left, right) => (new Date(left.timestamp).getTime() || 0) - (new Date(right.timestamp).getTime() || 0));
-
-    return normalized.length > 0 ? normalized : buildFallbackTimelineItems(entries);
-  }
-
-  function normalizeTimelineItem(item, fallbackFilePath) {
-    if (!item || typeof item !== "object") {
-      return undefined;
-    }
-
-    const kind = String(item.kind || "").trim();
-    if (kind === "checkpoint") {
-      return {
-        kind: "checkpoint",
-        id: String(item.checkpointId || buildCheckpointId(String(item.filePath || fallbackFilePath || ""), String(item.timestamp || Date.now()))),
-        checkpointId: String(item.checkpointId || ""),
-        timestamp: String(item.timestamp || ""),
-        filePath: String(item.filePath || fallbackFilePath || ""),
-        state: normalizeState(item.state)
-      };
-    }
-
-    if (kind === "runtimeEvent") {
-      return {
-        kind: "runtimeEvent",
-        id: String(item.runtimeEventId || item.id || ""),
-        runtimeEventId: String(item.runtimeEventId || item.id || ""),
-        timestamp: String(item.timestamp || ""),
-        filePath: item.filePath ? String(item.filePath) : undefined,
-        eventType: String(item.eventType || "RuntimeError"),
-        message: String(item.message || "Runtime event"),
-        severity: String(item.severity || "warning").toLowerCase() === "error" ? "error" : "warning",
-        relatedCheckpointId: item.relatedCheckpointId ? String(item.relatedCheckpointId) : undefined,
-        relatedIncidentId: item.relatedIncidentId ? String(item.relatedIncidentId) : undefined
-      };
-    }
-
-    if (kind === "incidentUpdate") {
-      return {
-        kind: "incidentUpdate",
-        id: String(item.incidentId || item.id || ""),
-        incidentId: String(item.incidentId || item.id || ""),
-        timestamp: String(item.timestamp || ""),
-        status: normalizeIncidentStatusLabel(item.status || "open"),
-        summary: String(item.summary || "Incident updated"),
-        runtimeConfirmed: Boolean(item.runtimeConfirmed)
-      };
-    }
-
-    return undefined;
-  }
-
-  function buildFallbackTimelineItems(entries) {
-    if (!Array.isArray(entries) || entries.length === 0) {
-      return [];
-    }
-
-    const fallback = [];
-    entries.forEach((entry) => {
-      fallback.push({
-        kind: "checkpoint",
-        id: entry.checkpointId || buildCheckpointId(entry.filePath, entry.timestamp),
-        checkpointId: entry.checkpointId,
-        timestamp: entry.timestamp,
-        filePath: entry.filePath,
-        state: entry.state
-      });
-
-      (entry.runtimeEvents || []).forEach((runtimeEvent) => {
-        fallback.push({
-          kind: "runtimeEvent",
-          id: runtimeEvent.id,
-          runtimeEventId: runtimeEvent.id,
-          timestamp: runtimeEvent.timestamp,
-          filePath: runtimeEvent.filePath,
-          eventType: runtimeEvent.type || runtimeEvent.eventType,
-          message: runtimeEvent.message,
-          severity: String(runtimeEvent.severity || "warning").toLowerCase() === "error" ? "error" : "warning",
-          relatedCheckpointId: runtimeEvent.relatedCheckpointId || runtimeEvent.linkedCheckpointId,
-          relatedIncidentId: runtimeEvent.relatedIncidentId || runtimeEvent.linkedIncidentId
-        });
-      });
-
-      (entry.incidents || []).forEach((incident) => {
-        fallback.push({
-          kind: "incidentUpdate",
-          id: incident.id,
-          incidentId: incident.id,
-          timestamp: incident.updatedAt || incident.lastRuntimeEventAt || entry.timestamp,
-          status: normalizeIncidentStatusLabel(incident.status),
-          summary: incident.title || incident.summary || "Incident updated",
-          runtimeConfirmed: Boolean(incident.runtimeConfirmed)
-        });
-      });
-    });
-
-    return fallback.sort((left, right) => (new Date(left.timestamp).getTime() || 0) - (new Date(right.timestamp).getTime() || 0));
   }
 
   function normalizeEntry(rawEntry, index, filePath) {
@@ -483,7 +345,7 @@
     const score = Number(rawEntry.score);
     const checkpointId = String(rawEntry.checkpointId || buildCheckpointId(rawEntry.filePath || filePath || "", rawEntry.timestamp || String(index)));
     const findings = Array.isArray(rawEntry.findings)
-      ? rawEntry.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, changedLineRanges, reasons, rawEntry.filePath || filePath || "", rawEntry.timestamp))
+      ? rawEntry.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, changedLineRanges, reasons))
       : buildFallbackFindings(reasons, changedLineRanges, rawEntry.analysis);
     const probableRootCauses = Array.isArray(rawEntry.probableRootCauses)
       ? rawEntry.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, filePath, findings))
@@ -527,45 +389,24 @@
     };
   }
 
-  function normalizeFinding(rawFinding, index, changedLineRanges, reasons, fallbackFilePath, fallbackTimestamp) {
+  function normalizeFinding(rawFinding, index, changedLineRanges, reasons) {
     if (!rawFinding || typeof rawFinding !== "object") {
       return {
         id: `finding-${index + 1}`,
-        kind: "compat_fallback",
         message: reasons[index] || "Structured finding",
         severity: "WARNING",
-        evidence: reasons[index] || "Generated from compatibility fallback.",
         confidence: Math.max(0.42, 0.9 - index * 0.1),
-        lineRange: (changedLineRanges.length > 0 ? changedLineRanges[0] : [1, 1]),
-        relatedSymbol: undefined,
-        filePath: fallbackFilePath,
-        timestamp: String(fallbackTimestamp || new Date().toISOString())
+        lineRanges: changedLineRanges.length > 0 ? changedLineRanges : [[1, 1]]
       };
     }
 
-    const canonicalLineRange = Array.isArray(rawFinding.lineRange) && rawFinding.lineRange.length >= 2
-      ? [Number(rawFinding.lineRange[0]), Number(rawFinding.lineRange[1])]
-      : undefined;
-    const legacyLineRange = Array.isArray(rawFinding.lineRanges) && rawFinding.lineRanges.length > 0 && Array.isArray(rawFinding.lineRanges[0])
-      ? [Number(rawFinding.lineRanges[0][0]), Number(rawFinding.lineRanges[0][1])]
-      : undefined;
-    const resolvedLineRange = (canonicalLineRange && Number.isFinite(canonicalLineRange[0]) && Number.isFinite(canonicalLineRange[1]))
-      ? canonicalLineRange
-      : (legacyLineRange && Number.isFinite(legacyLineRange[0]) && Number.isFinite(legacyLineRange[1]))
-        ? legacyLineRange
-        : (changedLineRanges.length > 0 ? changedLineRanges[0] : [1, 1]);
-
     return {
       id: String(rawFinding.id || `finding-${index + 1}`),
-      kind: String(rawFinding.kind || "compat_fallback"),
       message: String(rawFinding.message || rawFinding.summary || reasons[index] || "Structured finding"),
       severity: normalizeFindingSeverity(rawFinding.severity),
-      evidence: String(rawFinding.evidence || reasons[index] || rawFinding.message || "No additional evidence."),
       confidence: clampConfidence(rawFinding.confidence, 0.86 - index * 0.08),
-      lineRange: resolvedLineRange,
-      relatedSymbol: rawFinding.relatedSymbol ? String(rawFinding.relatedSymbol) : (rawFinding.symbol ? String(rawFinding.symbol) : undefined),
-      filePath: String(rawFinding.filePath || fallbackFilePath || ""),
-      timestamp: String(rawFinding.timestamp || fallbackTimestamp || new Date().toISOString())
+      lineRanges: normalizeLineRanges(rawFinding.lineRanges, changedLineRanges),
+      symbol: rawFinding.symbol ? String(rawFinding.symbol) : undefined
     };
   }
 
@@ -573,15 +414,10 @@
     const source = reasons.length > 0 ? reasons : [normalizeAnalysisText(analysis, reasons)];
     return source.filter(Boolean).map((reason, index) => ({
       id: `finding-${index + 1}`,
-      kind: "compat_fallback",
       message: reason,
       severity: index === 0 ? "ERROR" : "WARNING",
-      evidence: reason,
       confidence: Math.max(0.42, 0.88 - index * 0.08),
-      lineRange: changedLineRanges.length > 0 ? changedLineRanges[0] : [1, 1],
-      relatedSymbol: undefined,
-      filePath: "",
-      timestamp: new Date().toISOString()
+      lineRanges: changedLineRanges.length > 0 ? changedLineRanges : [[1, 1]]
     }));
   }
 
@@ -590,22 +426,18 @@
       return {
         id: `root-cause-${index + 1}`,
         filePath: fallbackFilePath || "",
-        relatedSymbol: undefined,
+        reason: "Probable cause",
         confidence: Math.max(0.38, 0.84 - index * 0.1),
-        signals: findings.slice(0, 2).map((finding) => finding.id)
+        linkedEvidence: findings.slice(0, 2).map((finding) => finding.id)
       };
     }
 
     return {
       id: String(rawCause.id || `root-cause-${index + 1}`),
       filePath: String(rawCause.filePath || fallbackFilePath || ""),
-      relatedSymbol: rawCause.relatedSymbol ? String(rawCause.relatedSymbol) : undefined,
+      reason: String(rawCause.reason || rawCause.message || "Probable cause"),
       confidence: clampConfidence(rawCause.confidence, 0.82 - index * 0.08),
-      signals: Array.isArray(rawCause.signals)
-        ? rawCause.signals.map(String)
-        : Array.isArray(rawCause.linkedEvidence)
-          ? rawCause.linkedEvidence.map(String)
-          : [String(rawCause.reason || rawCause.message || "Probable cause")]
+      linkedEvidence: Array.isArray(rawCause.linkedEvidence) ? rawCause.linkedEvidence.map(String) : findings.slice(0, 2).map((finding) => finding.id)
     };
   }
 
@@ -614,9 +446,9 @@
     return source.slice(0, 4).map((reason, index) => ({
       id: `root-cause-${index + 1}`,
       filePath: filePath || "",
-      relatedSymbol: undefined,
+      reason,
       confidence: Math.max(0.36, 0.9 - index * 0.12),
-      signals: [reason, ...findings.slice(0, Math.max(1, findings.length - index)).map((finding) => finding.id)]
+      linkedEvidence: findings.slice(0, Math.max(1, findings.length - index)).map((finding) => finding.id)
     }));
   }
 
@@ -640,16 +472,8 @@
     if (!rawIncident || typeof rawIncident !== "object") {
       return {
         id: `incident-${index + 1}`,
-        title: "Incident detail",
+        summary: "Incident detail",
         status: state === "ERROR" ? "OPEN" : state === "WARNING" ? "MITIGATED" : "RESOLVED",
-        openedAt: String(timestamp || new Date().toISOString()),
-        updatedAt: String(timestamp || new Date().toISOString()),
-        resolvedAt: state === "NORMAL" ? String(timestamp || new Date().toISOString()) : undefined,
-        findings: findings.map((finding) => finding.id),
-        impactedFiles: [filePath || ""].filter(Boolean),
-        relatedFiles: probableRootCauses.map((cause) => cause.filePath).filter(Boolean),
-        runtimeEventIds: runtimeEvents.map((event) => event.id),
-        runtimeEvidenceCount: runtimeEvents.length,
         runtimeConfirmationState: state === "ERROR" ? "RUNTIME_CONFIRMED" : state === "WARNING" ? "SUSPECTED" : "RESOLVED",
         runtimeConfirmed: state === "ERROR",
         statusReason: state === "ERROR"
@@ -661,7 +485,7 @@
         surfacedFile: filePath || "",
         linkedCheckpointId: checkpointId,
         linkedFindings: findings.map((finding) => finding.id),
-        probableCauses: probableRootCauses.map((cause) => cause.filePath),
+        probableCauses: probableRootCauses.map((cause) => cause.id),
         linkedRuntimeEvents: runtimeEvents.map((event) => event.id),
         lastRuntimeEventAt: runtimeEvents[0]?.timestamp,
         evidenceCount: findings.length + runtimeEvents.length
@@ -673,34 +497,8 @@
 
     return {
       id: String(rawIncident.id || `incident-${index + 1}`),
-      title: String(rawIncident.title || rawIncident.summary || rawIncident.message || "Incident detail"),
+      summary: String(rawIncident.summary || rawIncident.message || "Incident detail"),
       status: incidentStatus,
-      openedAt: String(rawIncident.openedAt || timestamp || new Date().toISOString()),
-      updatedAt: String(rawIncident.updatedAt || timestamp || new Date().toISOString()),
-      resolvedAt: rawIncident.resolvedAt ? String(rawIncident.resolvedAt) : undefined,
-      findings: Array.isArray(rawIncident.findings)
-        ? rawIncident.findings.map(String)
-        : Array.isArray(rawIncident.linkedFindings)
-          ? rawIncident.linkedFindings.map(String)
-          : findings.map((finding) => finding.id),
-      impactedFiles: Array.isArray(rawIncident.impactedFiles)
-        ? rawIncident.impactedFiles.map(String)
-        : [String(rawIncident.surfacedFile || rawIncident.filePath || filePath || "")].filter(Boolean),
-      relatedFiles: Array.isArray(rawIncident.relatedFiles)
-        ? rawIncident.relatedFiles.map(String)
-        : Array.isArray(rawIncident.probableCauses)
-          ? rawIncident.probableCauses.map(String)
-          : probableRootCauses.map((cause) => cause.filePath),
-      runtimeEventIds: Array.isArray(rawIncident.runtimeEventIds)
-        ? rawIncident.runtimeEventIds.map(String)
-        : Array.isArray(rawIncident.linkedRuntimeEvents)
-          ? rawIncident.linkedRuntimeEvents.map(String)
-          : runtimeEvents.map((event) => event.id),
-      runtimeEvidenceCount: Number.isFinite(Number(rawIncident.runtimeEvidenceCount))
-        ? Number(rawIncident.runtimeEvidenceCount)
-        : Number.isFinite(Number(rawIncident.evidenceCount))
-          ? Number(rawIncident.evidenceCount)
-          : runtimeEvents.length,
       runtimeConfirmationState,
       runtimeConfirmed: Boolean(rawIncident.runtimeConfirmed),
       statusReason: String(rawIncident.statusReason || rawIncident.reason || (incidentStatus === "RESOLVED" ? "Incident resolved." : incidentStatus === "OPEN" ? "Incident remains active." : "Incident mitigated.")),
@@ -710,7 +508,7 @@
       surfacedFile: String(rawIncident.surfacedFile || rawIncident.filePath || filePath || ""),
       linkedCheckpointId: String(rawIncident.linkedCheckpointId || checkpointId),
       linkedFindings: Array.isArray(rawIncident.linkedFindings) ? rawIncident.linkedFindings.map(String) : findings.map((finding) => finding.id),
-      probableCauses: Array.isArray(rawIncident.probableCauses) ? rawIncident.probableCauses.map(String) : probableRootCauses.map((cause) => cause.id || cause.filePath),
+      probableCauses: Array.isArray(rawIncident.probableCauses) ? rawIncident.probableCauses.map(String) : probableRootCauses.map((cause) => cause.id),
       linkedRuntimeEvents: Array.isArray(rawIncident.linkedRuntimeEvents) ? rawIncident.linkedRuntimeEvents.map(String) : runtimeEvents.map((event) => event.id),
       lastRuntimeEventAt: rawIncident.lastRuntimeEventAt ? String(rawIncident.lastRuntimeEventAt) : runtimeEvents[0]?.timestamp,
       evidenceCount: Number.isFinite(Number(rawIncident.evidenceCount)) ? Number(rawIncident.evidenceCount) : findings.length + runtimeEvents.length
@@ -722,16 +520,8 @@
     return [
       {
         id: `incident-${filePath || "file"}-${timestamp}`,
-        title: normalizeAnalysisText(analysis, reasons),
+        summary: normalizeAnalysisText(analysis, reasons),
         status,
-        openedAt: String(timestamp || new Date().toISOString()),
-        updatedAt: String(timestamp || new Date().toISOString()),
-        resolvedAt: status === "RESOLVED" ? String(timestamp || new Date().toISOString()) : undefined,
-        findings: findings.map((finding) => finding.id),
-        impactedFiles: [filePath || ""].filter(Boolean),
-        relatedFiles: probableRootCauses.map((cause) => cause.filePath).filter(Boolean),
-        runtimeEventIds: runtimeEvents.map((event) => event.id),
-        runtimeEvidenceCount: runtimeEvents.length,
         runtimeConfirmationState: runtimeEvents.length > 0 ? (status === "OPEN" ? "RUNTIME_CONFIRMED" : status === "MITIGATED" ? "MITIGATED" : "RESOLVED") : (status === "RESOLVED" ? "RESOLVED" : "SUSPECTED"),
         runtimeConfirmed: runtimeEvents.some((event) => event.runtimeConfirmed),
         statusReason: status === "OPEN" ? "Runtime evidence confirms the issue is active." : status === "MITIGATED" ? "Issue remains active but is reduced by the current state." : "Incident resolved.",
@@ -760,19 +550,15 @@
 
     return {
       id: String(rawEvent.id || `runtime-${index + 1}`),
-      type: normalizeRuntimeEventType(rawEvent.type || rawEvent.eventType),
+      eventType: normalizeRuntimeEventType(rawEvent.eventType),
       message: String(rawEvent.message || rawEvent.summary || "Runtime event"),
       timestamp: String(rawEvent.timestamp || timestamp),
-      severity: normalizeRuntimeSeverity(rawEvent.severity || rawEvent.level || "warning"),
+      severity: normalizeFindingSeverity(rawEvent.severity || rawEvent.level || "WARNING"),
       filePath: rawEvent.filePath ? String(rawEvent.filePath) : filePath || undefined,
       line: Number.isFinite(Number(rawEvent.line)) ? Number(rawEvent.line) : undefined,
-      column: Number.isFinite(Number(rawEvent.column)) ? Number(rawEvent.column) : undefined,
-      functionName: rawEvent.functionName ? String(rawEvent.functionName) : undefined,
-      stack: stackPreview.length > 0 ? stackPreview.join("\n") : buildRuntimeStackPreview(String(rawEvent.message || "Runtime event"), checkpointId, filePath).join("\n"),
-      relatedCheckpointId: String(rawEvent.relatedCheckpointId || rawEvent.linkedCheckpointId || checkpointId),
-      relatedIncidentId: rawEvent.relatedIncidentId ? String(rawEvent.relatedIncidentId) : (rawEvent.linkedIncidentId ? String(rawEvent.linkedIncidentId) : undefined),
-      relatedFindingIds: Array.isArray(rawEvent.relatedFindingIds) ? rawEvent.relatedFindingIds.map(String) : undefined,
-      evidence: Array.isArray(rawEvent.evidence) ? rawEvent.evidence.map(String) : undefined,
+      stackPreview: stackPreview.length > 0 ? stackPreview : buildRuntimeStackPreview(String(rawEvent.message || "Runtime event"), checkpointId, filePath),
+      linkedCheckpointId: String(rawEvent.linkedCheckpointId || checkpointId),
+      linkedIncidentId: rawEvent.linkedIncidentId ? String(rawEvent.linkedIncidentId) : undefined,
       runtimeConfirmed: Boolean(rawEvent.runtimeConfirmed),
       confirmationState: normalizeRuntimeConfirmationState(rawEvent.confirmationState, state, Boolean(rawEvent.runtimeConfirmed)),
       evidenceCount: Number.isFinite(Number(rawEvent.evidenceCount)) ? Number(rawEvent.evidenceCount) : Math.max(1, findings.length + probableRootCauses.length)
@@ -793,17 +579,15 @@
     return [
       {
         id: `runtime-${checkpointId}`,
-        type: normalizeRuntimeEventType(eventType),
+        eventType,
         message: normalizeRuntimeEventMessage(eventType, analysis),
         timestamp,
-        severity: state === "ERROR" ? "error" : "warning",
+        severity: state === "ERROR" ? "ERROR" : "WARNING",
         filePath,
         line: changedLineFromFindings(findings),
-        stack: buildRuntimeStackPreview(normalizeRuntimeEventMessage(eventType, analysis), checkpointId, filePath).join("\n"),
-        relatedCheckpointId: checkpointId,
-        relatedIncidentId: `incident-${timestamp}`,
-        relatedFindingIds: findings.map((finding) => finding.id),
-        evidence: probableRootCauses.slice(0, 3).flatMap((cause) => cause.signals || []),
+        stackPreview: buildRuntimeStackPreview(normalizeRuntimeEventMessage(eventType, analysis), checkpointId, filePath),
+        linkedCheckpointId: checkpointId,
+        linkedIncidentId: `incident-${timestamp}`,
         runtimeConfirmed,
         confirmationState: runtimeConfirmed ? "RUNTIME_CONFIRMED" : state === "WARNING" ? "SUSPECTED" : "MITIGATED",
         evidenceCount: Math.max(1, findings.length + probableRootCauses.length)
@@ -814,17 +598,15 @@
   function buildRuntimeEventFromState(filePath, checkpointId, timestamp, state, checkpoint, findings, probableRootCauses, index) {
     return {
       id: `runtime-${index + 1}-${checkpointId}`,
-      type: state === "ERROR" ? "RuntimeError" : state === "WARNING" ? "ConsoleError" : "NetworkFailure",
+      eventType: state === "ERROR" ? "RUNTIME_ERROR" : state === "WARNING" ? "CONSOLE_ERROR" : "NETWORK_FAILURE",
       message: normalizeRuntimeEventMessage(state === "ERROR" ? "RUNTIME_ERROR" : "CONSOLE_ERROR", `State ${state}`),
       timestamp,
-      severity: state === "ERROR" ? "error" : "warning",
+      severity: state === "ERROR" ? "ERROR" : "WARNING",
       filePath,
       line: changedLineFromFindings(findings),
-      stack: buildRuntimeStackPreview(`State ${state}`, checkpointId, filePath).join("\n"),
-      relatedCheckpointId: checkpointId,
-      relatedIncidentId: `incident-${timestamp}`,
-      relatedFindingIds: findings.map((finding) => finding.id),
-      evidence: probableRootCauses.slice(0, 3).flatMap((cause) => cause.signals || []),
+      stackPreview: buildRuntimeStackPreview(`State ${state}`, checkpointId, filePath),
+      linkedCheckpointId: checkpointId,
+      linkedIncidentId: `incident-${timestamp}`,
       runtimeConfirmed: state === "ERROR" || checkpoint,
       confirmationState: state === "ERROR" ? "RUNTIME_CONFIRMED" : state === "WARNING" ? "SUSPECTED" : "MITIGATED",
       evidenceCount: Math.max(1, findings.length + probableRootCauses.length)
@@ -832,26 +614,12 @@
   }
 
   function normalizeRuntimeEventType(value) {
-    const normalized = String(value || "ConsoleError").replace(/[_\s]/g, "").toLowerCase();
-    if (normalized === "runtimeerror") {
-      return "RuntimeError";
-    }
-    if (normalized === "unhandledrejection") {
-      return "UnhandledRejection";
-    }
-    if (normalized === "consoleerror") {
-      return "ConsoleError";
-    }
-    if (normalized === "networkfailure") {
-      return "NetworkFailure";
+    const normalized = String(value || "CONSOLE_ERROR").toUpperCase();
+    if (normalized === "RUNTIME_ERROR" || normalized === "UNHANDLED_REJECTION" || normalized === "CONSOLE_ERROR" || normalized === "NETWORK_FAILURE") {
+      return normalized;
     }
 
-    return "ConsoleError";
-  }
-
-  function normalizeRuntimeSeverity(value) {
-    const normalized = String(value || "warning").toLowerCase();
-    return normalized === "error" ? "error" : "warning";
+    return "CONSOLE_ERROR";
   }
 
   function normalizeRuntimeConfirmationState(value, state, runtimeConfirmed) {
@@ -894,9 +662,7 @@
 
   function changedLineFromFindings(findings) {
     const firstFinding = findings[0];
-    const firstRange = firstFinding && Array.isArray(firstFinding.lineRange)
-      ? firstFinding.lineRange
-      : (firstFinding && Array.isArray(firstFinding.lineRanges) ? firstFinding.lineRanges[0] : undefined);
+    const firstRange = firstFinding && Array.isArray(firstFinding.lineRanges) ? firstFinding.lineRanges[0] : undefined;
     return firstRange && Number.isFinite(Number(firstRange[0])) ? Number(firstRange[0]) : 1;
   }
 
@@ -1279,7 +1045,6 @@
     appState.mode = "demo";
     appState.demoScenarioIndex = index;
     appState.demoEntries = buildDemoTimeline(demoScenarios[index]);
-    appState.demoTimelineItems = buildFallbackTimelineItems(appState.demoEntries);
     appState.selectedIndex = appState.demoEntries.length - 1;
     appState.codeState = "after";
     appState.sourceLabel = "Demo mode";
@@ -1294,7 +1059,6 @@
   function renderEmptyLiveState(filePath) {
     appState.mode = "live";
     appState.liveEntries = [];
-    appState.liveTimelineItems = [];
     appState.selectedIndex = 0;
     appState.sourceLabel = buildSourceLabel(filePath || "Live file", 0);
     elements.scenarioRow.classList.add("hidden");
@@ -1303,14 +1067,6 @@
 
   function getActiveEntries() {
     return appState.mode === "live" ? appState.liveEntries : appState.demoEntries;
-  }
-
-  function getActiveTimelineItems() {
-    if (appState.mode === "live") {
-      return Array.isArray(appState.liveTimelineItems) ? appState.liveTimelineItems : [];
-    }
-
-    return Array.isArray(appState.demoTimelineItems) ? appState.demoTimelineItems : buildFallbackTimelineItems(appState.demoEntries);
   }
 
   function getSelectedEntry() {
@@ -1434,7 +1190,7 @@
   renderRuntimeEvents(selected.runtimeEvents, selected);
   renderIncidentList(selected.incidents, selected);
   renderIncidentDetail(selected, getSelectedIncident(selected));
-  renderUnifiedTimeline(entries, getActiveTimelineItems());
+  renderUnifiedTimeline(entries);
     renderFileContext(selected.relatedFiles, selected.impactedFiles);
     updateCode(selected);
     setCodeToggle();
@@ -1592,10 +1348,10 @@
 
     elements.findingsList.innerHTML = findings
       .map((finding) => {
-        const lineRange = Array.isArray(finding.lineRange) && finding.lineRange.length >= 2
-          ? `L${finding.lineRange[0]}-${finding.lineRange[1]}`
+        const lineRanges = Array.isArray(finding.lineRanges) && finding.lineRanges.length > 0
+          ? finding.lineRanges.map((range) => `L${range[0]}-${range[1]}`).join(", ")
           : "-";
-        const symbol = finding.relatedSymbol ? `<span class="mini-pill">${escapeHtml(String(finding.relatedSymbol))}</span>` : "";
+        const symbol = finding.symbol ? `<span class="mini-pill">${escapeHtml(String(finding.symbol))}</span>` : "";
         return `
           <article class="finding-item finding-${String(finding.severity || "WARNING").toLowerCase()}">
             <div class="finding-topline">
@@ -1604,7 +1360,7 @@
             </div>
             <p>${escapeHtml(String(finding.message || "Finding"))}</p>
             <div class="finding-meta">
-              <span>${escapeHtml(lineRange)}</span>
+              <span>${escapeHtml(lineRanges)}</span>
               ${symbol}
             </div>
           </article>
@@ -1628,9 +1384,9 @@
               <strong>${escapeHtml(String(candidate.filePath || ""))}</strong>
               <span class="mini-pill">${escapeHtml(String((Number(candidate.confidence) * 100).toFixed(0)))}%</span>
             </div>
-            <p>${escapeHtml(String(candidate.relatedSymbol || "Probable root cause"))}</p>
+            <p>${escapeHtml(String(candidate.reason || "Probable root cause"))}</p>
             <div class="finding-meta">
-              <span>${escapeHtml((candidate.signals || []).join(" | ") || "No linked evidence")}</span>
+              <span>${escapeHtml((candidate.linkedEvidence || []).join(", ") || "No linked evidence")}</span>
             </div>
           </div>
         </article>
@@ -1649,11 +1405,11 @@
       .map((event) => {
         const selected = appState.selectedRuntimeEventId ? appState.selectedRuntimeEventId === event.id : runtimeEvents[0]?.id === event.id;
         const confirmedClass = runtimeConfirmationClass(event.confirmationState, event.runtimeConfirmed);
-        const checkpointLabel = event.relatedCheckpointId ? event.relatedCheckpointId : "No checkpoint linked";
+        const checkpointLabel = event.linkedCheckpointId ? event.linkedCheckpointId : "No checkpoint linked";
         return `
           <button class="runtime-event-item ${selected ? "selected" : ""}" type="button" data-runtime-event-id="${escapeHtml(event.id)}">
             <div class="finding-topline">
-              <strong>${escapeHtml(String(event.type || event.eventType || "RuntimeEvent"))}</strong>
+              <strong>${escapeHtml(String(event.eventType).replace(/_/g, " "))}</strong>
               <span class="mini-pill ${confirmedClass}">${escapeHtml(runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed))}</span>
             </div>
             <p>${escapeHtml(String(event.message))}</p>
@@ -1700,16 +1456,16 @@
       return;
     }
 
-    elements.runtimeDetailType.textContent = String(event.type || event.eventType || "RuntimeEvent");
+    elements.runtimeDetailType.textContent = String(event.eventType).replace(/_/g, " ");
     elements.runtimeDetailStatus.textContent = runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed);
     elements.runtimeDetailMessage.textContent = event.message;
     elements.runtimeDetailTime.textContent = event.timestamp || "-";
     elements.runtimeDetailFile.textContent = event.filePath || "-";
-    elements.runtimeDetailLine.textContent = event.line ? `L${event.line}${event.column ? `:${event.column}` : ""}` : "-";
-    elements.runtimeDetailCheckpoint.textContent = event.relatedCheckpointId || "-";
-    elements.runtimeDetailStack.textContent = typeof event.stack === "string" && event.stack.trim().length > 0
-      ? event.stack
-      : (Array.isArray(event.stackPreview) && event.stackPreview.length > 0 ? event.stackPreview.join("\n") : "No stack trace captured yet.");
+    elements.runtimeDetailLine.textContent = event.line ? `L${event.line}` : "-";
+    elements.runtimeDetailCheckpoint.textContent = event.linkedCheckpointId || "-";
+    elements.runtimeDetailStack.textContent = Array.isArray(event.stackPreview) && event.stackPreview.length > 0
+      ? event.stackPreview.join("\n")
+      : "No stack trace captured yet.";
   }
 
   function renderEmptyRuntimeDetail() {
@@ -1723,58 +1479,39 @@
     elements.runtimeDetailStack.textContent = "No runtime stack captured yet.";
   }
 
-  function renderUnifiedTimeline(entries, timelineItems) {
-    if (!Array.isArray(timelineItems) || timelineItems.length === 0) {
+  function renderUnifiedTimeline(entries) {
+    const selectedEntry = getSelectedEntry();
+    if (!selectedEntry) {
       elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
       return;
     }
 
-    elements.timelineStream.innerHTML = timelineItems
-      .map((item) => {
-        if (item.kind === "checkpoint") {
-          return `
-            <button class="timeline-item" type="button" data-timeline-kind="checkpoint" data-timeline-id="${escapeHtml(item.id || item.checkpointId || "")}">
-              <span class="timeline-item-marker ${stateClass(item.state)}"></span>
-              <div class="timeline-item-body">
-                <div class="finding-topline">
-                  <strong>${escapeHtml(`${item.state} checkpoint`)}</strong>
-                  <span class="mini-pill">${escapeHtml(String(item.timestamp || ""))}</span>
-                </div>
-                <p>${escapeHtml(item.filePath || "")}</p>
-              </div>
-            </button>
-          `;
-        }
+    const selectedTimelineItem = {
+      kind: "checkpoint",
+      id: selectedEntry.checkpointId || buildCheckpointId(selectedEntry.filePath, selectedEntry.timestamp),
+      title: `${selectedEntry.state} checkpoint`,
+      message: selectedEntry.analysis,
+      subtitle: `${selectedEntry.previousState} → ${selectedEntry.state} · ${selectedEntry.checkpoint ? "checkpoint" : "save"}`,
+      timestampLabel: selectedEntry.timestamp,
+      timestampValue: new Date(selectedEntry.timestamp).getTime() || 0,
+      state: selectedEntry.state
+    };
 
-        if (item.kind === "runtimeEvent") {
-          return `
-            <button class="timeline-item" type="button" data-timeline-kind="runtimeEvent" data-timeline-id="${escapeHtml(item.runtimeEventId || item.id || "")}">
-              <span class="timeline-item-marker ${item.severity === "error" ? "error" : "warning"}"></span>
-              <div class="timeline-item-body">
-                <div class="finding-topline">
-                  <strong>${escapeHtml(item.eventType || "RuntimeError")}</strong>
-                  <span class="mini-pill">${escapeHtml(String(item.timestamp || ""))}</span>
-                </div>
-                <p>${escapeHtml(String(item.message || "Runtime event"))}</p>
-              </div>
-            </button>
-          `;
-        }
-
-        return `
-          <button class="timeline-item" type="button" data-timeline-kind="incidentUpdate" data-timeline-id="${escapeHtml(item.incidentId || item.id || "")}">
-            <span class="timeline-item-marker ${item.runtimeConfirmed ? "error" : "warning"}"></span>
-            <div class="timeline-item-body">
-              <div class="finding-topline">
-                <strong>${escapeHtml(String(item.status || "Open"))}</strong>
-                <span class="mini-pill">${escapeHtml(String(item.timestamp || ""))}</span>
-              </div>
-              <p>${escapeHtml(String(item.summary || "Incident updated"))}</p>
-            </div>
-          </button>
-        `;
-      })
-      .join("");
+    elements.timelineStream.innerHTML = `
+      <button class="timeline-item selected" type="button" data-timeline-kind="checkpoint" data-timeline-id="${escapeHtml(selectedTimelineItem.id)}">
+        <span class="timeline-item-marker ${stateClass(selectedTimelineItem.state)}"></span>
+        <div class="timeline-item-body">
+          <div class="finding-topline">
+            <strong>${escapeHtml(selectedTimelineItem.title)}</strong>
+            <span class="mini-pill">${escapeHtml(selectedTimelineItem.timestampLabel)}</span>
+          </div>
+          <p>${escapeHtml(selectedTimelineItem.message)}</p>
+          <div class="finding-meta">
+            <span>${escapeHtml(selectedTimelineItem.subtitle)}</span>
+          </div>
+        </div>
+      </button>
+    `;
 
     elements.timelineStream.querySelectorAll("[data-timeline-kind]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1789,34 +1526,6 @@
           if (checkpointIndex >= 0) {
             selectCheckpoint(checkpointIndex, { stopReplay: true });
           }
-          return;
-        }
-
-        if (kind === "incidentUpdate") {
-          const selectedEntry = getSelectedEntry();
-          if (!selectedEntry || !Array.isArray(selectedEntry.incidents)) {
-            return;
-          }
-
-          const incident = selectedEntry.incidents.find((candidate) => candidate.id === id);
-          if (!incident) {
-            return;
-          }
-
-          appState.selectedIncidentId = incident.id;
-          const linkedRuntimeEvent = Array.isArray(incident.runtimeEventIds)
-            ? incident.runtimeEventIds[0]
-            : (Array.isArray(incident.linkedRuntimeEvents) ? incident.linkedRuntimeEvents[0] : undefined);
-          if (linkedRuntimeEvent) {
-            appState.selectedRuntimeEventId = linkedRuntimeEvent;
-          }
-
-          renderIncidentList(selectedEntry.incidents, selectedEntry);
-          renderIncidentDetail(selectedEntry, incident);
-          if (Array.isArray(selectedEntry.runtimeEvents)) {
-            renderRuntimeEvents(selectedEntry.runtimeEvents, selectedEntry);
-          }
-          applyPaneVisibility();
           return;
         }
 
@@ -1846,21 +1555,18 @@
     }
 
     appState.selectedIncidentId = selectedIncident.id;
-    elements.incidentDetailSummary.textContent = selectedIncident.title || selectedIncident.summary;
+    elements.incidentDetailSummary.textContent = selectedIncident.summary;
     elements.incidentDetailStatus.textContent = normalizeIncidentStatusLabel(selectedIncident.status);
     elements.incidentDetailRuntimeConfirmation.textContent = runtimeConfirmationLabel(selectedIncident.runtimeConfirmationState, selectedIncident.runtimeConfirmed);
     elements.incidentDetailSeverity.textContent = `${entry.state} · ${selectedIncident.statusReason}`;
-    elements.incidentDetailFile.textContent = (Array.isArray(selectedIncident.impactedFiles) && selectedIncident.impactedFiles[0]) || selectedIncident.surfacedFile || "-";
+    elements.incidentDetailFile.textContent = selectedIncident.surfacedFile || "-";
     elements.incidentDetailCheckpoint.textContent = selectedIncident.linkedCheckpointId || entry.checkpointId || "-";
-    elements.incidentDetailRuntimeCount.textContent = String(selectedIncident.runtimeEvidenceCount || selectedIncident.evidenceCount || 0);
+    elements.incidentDetailRuntimeCount.textContent = String(selectedIncident.evidenceCount || 0);
     elements.incidentDetailLastRuntime.textContent = selectedIncident.lastRuntimeEventAt || "-";
-    elements.incidentDetailReason.textContent = selectedIncident.statusReason || selectedIncident.title || selectedIncident.summary;
-    const findingIds = Array.isArray(selectedIncident.findings) ? selectedIncident.findings : selectedIncident.linkedFindings || [];
-    const causeIds = Array.isArray(selectedIncident.relatedFiles) ? selectedIncident.relatedFiles : selectedIncident.probableCauses || [];
-    const runtimeIds = Array.isArray(selectedIncident.runtimeEventIds) ? selectedIncident.runtimeEventIds : selectedIncident.linkedRuntimeEvents || [];
-    elements.incidentDetailFindings.innerHTML = renderLinkedChips(findingIds);
-    elements.incidentDetailCauses.innerHTML = renderLinkedChips(causeIds);
-    elements.incidentDetailRuntimeEvents.innerHTML = renderLinkedChips(runtimeIds);
+    elements.incidentDetailReason.textContent = selectedIncident.statusReason || selectedIncident.summary;
+    elements.incidentDetailFindings.innerHTML = renderLinkedChips(selectedIncident.linkedFindings, selectedIncident.linkedFindings.length ? "finding" : "none");
+    elements.incidentDetailCauses.innerHTML = renderLinkedChips(selectedIncident.probableCauses, selectedIncident.probableCauses.length ? "cause" : "none");
+    elements.incidentDetailRuntimeEvents.innerHTML = renderLinkedChips(selectedIncident.linkedRuntimeEvents, selectedIncident.linkedRuntimeEvents.length ? "runtime" : "none");
   }
 
   function renderEmptyIncidentDetail() {
@@ -1898,14 +1604,14 @@
         return `
           <button class="incident-item ${isSelected ? "selected" : ""}" type="button" data-incident-index="${index}">
             <div class="finding-topline">
-              <strong>${escapeHtml(String(incident.title || incident.summary || "Incident"))}</strong>
+              <strong>${escapeHtml(String(incident.summary || "Incident"))}</strong>
               <span class="mini-pill ${incidentStatusClass(incident.status)}">${escapeHtml(normalizeIncidentStatusLabel(incident.status))}</span>
             </div>
-            <p>${escapeHtml(String((incident.impactedFiles && incident.impactedFiles[0]) || incident.surfacedFile || ""))}</p>
+            <p>${escapeHtml(String(incident.surfacedFile || ""))}</p>
             <div class="trail-row">${trail}</div>
             <div class="finding-meta">
               <span>${escapeHtml(runtimeConfirmationLabel(incident.runtimeConfirmationState, incident.runtimeConfirmed))}</span>
-              <span>${escapeHtml(String(incident.runtimeEvidenceCount || incident.evidenceCount || 0))} evidence items</span>
+              <span>${escapeHtml(String(incident.evidenceCount || 0))} evidence items</span>
             </div>
           </button>
         `;
@@ -1921,9 +1627,7 @@
         }
 
         appState.selectedIncidentId = incident.id;
-        const linkedRuntimeEvent = Array.isArray(incident.runtimeEventIds)
-          ? incident.runtimeEventIds[0]
-          : (Array.isArray(incident.linkedRuntimeEvents) ? incident.linkedRuntimeEvents[0] : undefined);
+        const linkedRuntimeEvent = Array.isArray(incident.linkedRuntimeEvents) ? incident.linkedRuntimeEvents[0] : undefined;
         if (linkedRuntimeEvent) {
           appState.selectedRuntimeEventId = linkedRuntimeEvent;
         }
@@ -1959,13 +1663,7 @@
       return undefined;
     }
 
-    return entry.incidents.find((incident) => {
-      if (Array.isArray(incident.runtimeEventIds) && incident.runtimeEventIds.includes(runtimeEventId)) {
-        return true;
-      }
-
-      return Array.isArray(incident.linkedRuntimeEvents) && incident.linkedRuntimeEvents.includes(runtimeEventId);
-    });
+    return entry.incidents.find((incident) => Array.isArray(incident.linkedRuntimeEvents) && incident.linkedRuntimeEvents.includes(runtimeEventId));
   }
 
   function renderLinkedChips(values) {
@@ -2055,7 +1753,7 @@
 
   function formatRuntimeLocation(event) {
     const location = event.filePath ? event.filePath.split(/[\\/]/).pop() : "unknown file";
-    const line = event.line ? `:${event.line}${event.column ? `:${event.column}` : ""}` : "";
+    const line = event.line ? `:${event.line}` : "";
     return `${location}${line}`;
   }
 
