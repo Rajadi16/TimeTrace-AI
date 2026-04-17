@@ -46,6 +46,11 @@ function buildTimelineCheckpointRecord(
 		changedLineRanges: result.changedLineRanges,
 		features: result.features,
 		codePreview,
+		findings: result.findings,
+		probableRootCauses: result.probableRootCauses,
+	relatedFiles: result.relatedFiles,
+		impactedFiles: result.impactedFiles,
+		incidents: result.incidents,
 	};
 }
 
@@ -256,12 +261,38 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 	<div class="aurora"></div>
 	<main class="panel" role="application" aria-label="TimeTrace AI Sidebar">
 		<header class="header reveal">
-			<h1>TimeTrace AI</h1>
-			<p>Rewind. Analyze. Fix.</p>
+			<div class="header-beam"></div>
+			<div class="header-topline">
+				<div>
+					<h1>TimeTrace AI</h1>
+					<p>Rewind. Analyze. Fix.</p>
+				</div>
+				<span class="header-pill" id="header-state-pill">NORMAL</span>
+			</div>
+			<div class="header-meta">
+				<div class="header-meta-item">
+					<span>File</span>
+					<strong id="header-file">Demo mode</strong>
+				</div>
+				<div class="header-meta-item">
+					<span>Checkpoint</span>
+					<strong id="header-checkpoint">-</strong>
+				</div>
+				<div class="header-meta-item">
+					<span>Score</span>
+					<strong id="header-score">-</strong>
+				</div>
+			</div>
 			<div class="header-underline"></div>
 		</header>
 
-		<section class="section hero reveal" id="timeline-section">
+		<nav class="pane-switch reveal" aria-label="Sidebar sections">
+			<button class="pane-btn active" data-pane-target="overview" type="button">Overview</button>
+			<button class="pane-btn" data-pane-target="code" type="button">Code</button>
+			<button class="pane-btn" data-pane-target="insights" type="button">Insights</button>
+		</nav>
+
+		<section class="section hero reveal" id="timeline-section" data-pane="overview">
 			<div class="timeline-topline">
 				<div class="section-label">Incident Timeline</div>
 				<div class="timeline-meta">
@@ -276,19 +307,22 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="timeline-empty hidden" id="timeline-empty">Waiting for checkpoint history.</div>
 
 			<div class="timeline-wrap" id="timeline-wrap">
-				<div class="timeline-track" id="timeline-track"></div>
-				<div class="timeline-progress" id="timeline-progress"></div>
-				<div class="timeline-nodes" id="timeline-nodes"></div>
-				<input id="scrubber" type="range" min="0" max="2" step="1" value="0" aria-label="Rewind timeline scrubber" />
+				<div class="timeline-inner" id="timeline-inner">
+					<div class="timeline-track" id="timeline-track"></div>
+					<div class="timeline-progress" id="timeline-progress"></div>
+					<div class="timeline-nodes" id="timeline-nodes"></div>
+				</div>
 			</div>
+			<div class="timeline-stamps" id="timeline-stamps" aria-label="Checkpoint timestamps"></div>
 
-			<div class="timeline-legend">
-				<span class="pill normal">Normal</span>
-				<span class="pill warning">Warning</span>
-				<span class="pill error">Error</span>
+			<div class="timeline-actions">
+				<button class="icon-btn" id="timeline-play-pause" type="button" aria-label="Play timeline" title="Play / Pause">
+					<span id="timeline-play-pause-icon">&#9654;</span>
+				</button>
+				<button class="icon-btn" id="timeline-rewind" type="button" aria-label="Rewind timeline" title="Rewind">
+					<span>&#8630;</span>
+				</button>
 			</div>
-
-			<button class="btn btn-secondary" id="timeline-replay" type="button">Replay Timeline</button>
 			<div class="playback-row">
 				<label for="replay-speed">Replay Speed</label>
 				<select id="replay-speed" aria-label="Replay speed selector">
@@ -299,16 +333,19 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			</div>
 		</section>
 
-		<section class="card glass reveal" id="error-card">
-			<div class="card-title">Error Details</div>
-			<div class="metrics">
-				<div><span>Type</span><strong id="error-type"></strong></div>
-				<div><span>Line</span><strong id="error-line"></strong></div>
-				<div><span>Timestamp</span><strong id="error-time"></strong></div>
+		<section class="card glass reveal" id="error-card" data-pane="overview">
+			<div class="card-title">Checkpoint Detail</div>
+			<div class="metrics checkpoint-metrics">
+				<div><span>State</span><strong id="checkpoint-state"></strong></div>
+				<div><span>Score</span><strong id="checkpoint-score"></strong></div>
+				<div><span>Transition</span><strong id="checkpoint-transition"></strong></div>
+				<div><span>Checkpoint</span><strong id="checkpoint-marker"></strong></div>
 			</div>
+			<p class="checkpoint-summary" id="checkpoint-summary"></p>
+			<p class="checkpoint-timestamp" id="checkpoint-timestamp"></p>
 		</section>
 
-		<section class="card telemetry-card reveal" id="latency-card">
+		<section class="card telemetry-card reveal" id="latency-card" data-pane="insights">
 			<div class="card-title">Checkpoint Signal</div>
 			<div class="sparkline-wrap">
 				<svg class="sparkline" id="sparkline" viewBox="0 0 180 54" preserveAspectRatio="none" aria-label="Checkpoint signal sparkline">
@@ -322,16 +359,12 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			</div>
 		</section>
 
-		<section class="card root-cause reveal hidden" id="root-cause-card">
-			<div class="card-title">Checkpoint Details</div>
-			<div class="checkpoint-strip">
-				<span class="state-badge" id="state-badge"></span>
-				<span class="checkpoint-timestamp" id="checkpoint-timestamp"></span>
-			</div>
-			<p id="root-cause-text"></p>
+		<section class="card root-cause reveal hidden" id="root-cause-card" data-pane="insights">
+			<div class="card-title">Root-Cause Candidates</div>
+			<div class="ranking-list" id="root-cause-list"></div>
 		</section>
 
-		<section class="card code-card reveal" id="code-card">
+		<section class="card code-card reveal" id="code-card" data-pane="code">
 			<div class="card-title">Relevant Code Segment</div>
 			<p class="card-subtitle">Only impacted lines are shown</p>
 			<div class="code-impact" id="changed-lines"></div>
@@ -342,24 +375,27 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			<pre class="code-window" id="code-window" aria-live="polite"></pre>
 		</section>
 
-		<section class="card flow-card reveal" id="impact-flow-card">
-			<div class="card-title">Impact Flow</div>
-			<div class="flow" id="impact-flow" aria-label="System impact flow"></div>
+		<section class="card flow-card reveal" id="impact-flow-card" data-pane="insights">
+			<div class="card-title">Findings</div>
+			<div class="findings-list" id="findings-list"></div>
 		</section>
 
-		<section class="card analysis-card reveal" id="analysis-card">
-			<div class="card-title">AI Analysis</div>
-			<div class="analysis-block">
-				<h3>Summary</h3>
+		<section class="card analysis-card reveal" id="analysis-card" data-pane="insights">
+			<div class="card-title">Incidents and Cross-File Context</div>
+			<div class="incident-list" id="incident-list"></div>
+			<div class="file-context-grid">
+				<div>
+					<div class="mini-title">Related Files</div>
+					<div class="context-list" id="related-files-list"></div>
+				</div>
+				<div>
+					<div class="mini-title">Impacted Files</div>
+					<div class="context-list" id="impacted-files-list"></div>
+				</div>
+			</div>
+			<div class="compat-block">
+				<div class="mini-title">Compatibility Summary</div>
 				<p id="analysis-summary"></p>
-			</div>
-			<div class="analysis-block">
-				<h3>Root Cause</h3>
-				<p id="analysis-cause"></p>
-			</div>
-			<div class="analysis-block">
-				<h3>Impact</h3>
-				<p id="analysis-impact"></p>
 			</div>
 		</section>
 

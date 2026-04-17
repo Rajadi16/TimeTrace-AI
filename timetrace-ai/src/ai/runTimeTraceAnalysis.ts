@@ -1,5 +1,13 @@
 import { analyzeChange } from './analyzeChange';
-import type { AnalyzeChangeInput, AnalysisState, FeatureSet } from './types';
+import type {
+	AnalyzeChangeInput,
+	AnalysisState,
+	FeatureSet,
+	FileContextItem,
+	IncidentRecord,
+	ProbableRootCause,
+	StructuredFinding,
+} from './types';
 
 /**
  * Canonical UI/integration entrypoint.
@@ -34,6 +42,11 @@ export interface TimeTraceAnalysisResult {
 	analysis: string;
 	changedLineRanges: number[][];
 	features: FeatureSet;
+	findings: StructuredFinding[];
+	probableRootCauses: ProbableRootCause[];
+	relatedFiles: FileContextItem[];
+	impactedFiles: FileContextItem[];
+	incidents: IncidentRecord[];
 }
 
 export function runTimeTraceAnalysis(input: TimeTraceAnalysisInput): TimeTraceAnalysisResult {
