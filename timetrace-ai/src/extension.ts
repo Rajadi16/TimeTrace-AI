@@ -5,6 +5,7 @@ import {
 	type CodePreviewRecord,
 	type TimelineCheckpointRecord,
 } from './ai/snapshotStore';
+import { emptyGraph, updateGraphForFile } from './ai/dependencyGraph';
 import type { TimeTraceAnalysisResult } from './ai';
 
 interface SidebarTimelinePayload {
@@ -48,16 +49,19 @@ function buildTimelineCheckpointRecord(
 		codePreview,
 		findings: result.findings,
 		probableRootCauses: result.probableRootCauses,
-	relatedFiles: result.relatedFiles,
-		impactedFiles: result.impactedFiles,
 		incidents: result.incidents,
+		impactedFiles: result.impactedFiles,
+		relatedFiles: result.relatedFiles,
 	};
 }
 
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
-	const snapshotStore = new SnapshotStore(context.globalState);
+	const snapshotStore = new SnapshotStore(context.workspaceState);
 	const provider = new TimeTraceSidebarProvider(context.extensionUri);
+
+	// Determine workspace root for import resolution
+	const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
 
 	function publishTimelineForFile(filePath: string): void {
 		provider.publishTimeline({
@@ -88,6 +92,14 @@ export function activate(context: vscode.ExtensionContext) {
 		const currentCode = document.getText();
 
 		if (!previousSnapshot) {
+			// First save — update graph, store baseline snapshot
+			const graph = updateGraphForFile(
+				snapshotStore.getWorkspaceGraph() ?? emptyGraph(),
+				document.uri.fsPath,
+				currentCode,
+				workspaceRoot,
+			);
+			snapshotStore.saveWorkspaceGraph(graph);
 			snapshotStore.saveSnapshot({
 				filePath: document.uri.fsPath,
 				language: document.languageId,
@@ -99,16 +111,36 @@ export function activate(context: vscode.ExtensionContext) {
 			return undefined;
 		}
 
-		const result = runTimeTraceAnalysis({
-			filePath: document.uri.fsPath,
-			language: document.languageId,
-			timestamp,
-			previousCode: previousSnapshot.code,
+		// Update graph for this file
+		const graph = updateGraphForFile(
+			snapshotStore.getWorkspaceGraph() ?? emptyGraph(),
+			document.uri.fsPath,
 			currentCode,
-			previousState: previousSnapshot.state,
-		});
+			workspaceRoot,
+		);
+		snapshotStore.saveWorkspaceGraph(graph);
+
+		// Run the full 6-step analysis pipeline
+		const result = runTimeTraceAnalysis(
+			{
+				filePath: document.uri.fsPath,
+				language: document.languageId,
+				timestamp,
+				previousCode: previousSnapshot.code,
+				currentCode,
+				previousState: previousSnapshot.state,
+			},
+			{
+				existingIncidents: snapshotStore.getIncidents(),
+				graph,
+				recentSaves: snapshotStore.getRecentSaves(),
+				workspaceRoot,
+			},
+		);
+
 		const codePreview = buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges);
 
+		// Persist
 		snapshotStore.saveSnapshot({
 			filePath: document.uri.fsPath,
 			language: document.languageId,
@@ -120,22 +152,35 @@ export function activate(context: vscode.ExtensionContext) {
 			filePath: document.uri.fsPath,
 			timestamp,
 			result,
+			findings: result.findings,
 		});
+		snapshotStore.saveIncidents(result.incidents);
+
 		if (result.checkpoint) {
 			snapshotStore.saveTimelineCheckpoint(
 				buildTimelineCheckpointRecord(document.uri.fsPath, timestamp, result, codePreview),
 			);
 		}
 
+		// Output channel logging
 		outputChannel.appendLine(JSON.stringify(result, null, 2));
-		vscode.window.setStatusBarMessage(`TimeTrace AI: ${result.state} (${result.score})`, 4000);
+
+		// Status bar — use first high-severity finding message if present
+		const topFinding = result.findings.find((f) => f.severity === 'error') ?? result.findings.find((f) => f.severity === 'warning');
+		const statusMsg = topFinding
+			? `TimeTrace AI [${result.state}]: ${topFinding.message}`
+			: `TimeTrace AI: ${result.state} (${result.score})`;
+		vscode.window.setStatusBarMessage(statusMsg, 4000);
+
 		publishTimelineForFile(document.uri.fsPath);
+
 		if (result.checkpoint) {
 			outputChannel.appendLine(
 				`[checkpoint] ${document.uri.fsPath} ${result.previousState} -> ${result.state}`,
 			);
 			void vscode.window.showInformationMessage(`TimeTrace AI checkpoint: ${result.analysis}`);
 		}
+
 		return result;
 	}
 
@@ -145,7 +190,7 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.commands.registerCommand('timetrace-ai.openSidebar', async () => {
 			await vscode.commands.executeCommand('workbench.view.extension.timetraceAi');
 			await vscode.commands.executeCommand('timetraceAi.sidebar.focus');
-		})
+		}),
 	);
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
 		analyzeDocument(document);
@@ -153,7 +198,6 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
 		syncSidebarForDocument(editor?.document);
 	}));
-
 
 	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', () => {
 		const editor = vscode.window.activeTextEditor;

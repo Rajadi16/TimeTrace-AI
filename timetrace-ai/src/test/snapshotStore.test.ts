@@ -37,6 +37,10 @@ function createCheckpointRecord(index: number, filePath = '/tmp/example.ts'): Ti
 			heavyLoopAdded: false,
 			complexityDelta: 0,
 			todoHackCommentAdded: false,
+			cosmetic: false,
+			changedSymbols: [],
+			exportedNamesChanged: [],
+			featureLineRanges: {},
 			currentMetrics: {
 				complexity: 1,
 				guardCount: 1,
@@ -57,6 +61,9 @@ function createCheckpointRecord(index: number, filePath = '/tmp/example.ts'): Ti
 			after: [`after-${index}`],
 			focusLine: 1,
 		},
+		findings: [],
+		impactedFiles: [],
+		relatedFiles: [],
 	};
 }
 
@@ -96,5 +103,59 @@ suite('Snapshot Store Timeline Suite', () => {
 		assert.strictEqual(history.length, 50);
 		assert.strictEqual(history[0].analysis, 'analysis-6');
 		assert.strictEqual(history[49].analysis, 'analysis-55');
+	});
+});
+
+suite('Snapshot Store Incident Suite', () => {
+	test('saves and retrieves incidents', () => {
+		const store = new SnapshotStore(new MockMemento() as never);
+		const incident = {
+			id: 'incident:test:2026-04-17T00:00:00.000Z:syntax_error',
+			status: 'open' as const,
+			title: '[ERROR] Syntax error detected in example.ts',
+			openedAt: '2026-04-17T00:00:00.000Z',
+			updatedAt: '2026-04-17T00:00:00.000Z',
+			findings: ['syntax_error:/tmp/example.ts:1'],
+			impactedFiles: [],
+			relatedFiles: [],
+		};
+
+		store.saveIncidents([incident]);
+		const retrieved = store.getIncidents();
+		assert.strictEqual(retrieved.length, 1);
+		assert.strictEqual(retrieved[0].id, incident.id);
+		assert.strictEqual(retrieved[0].status, 'open');
+	});
+
+	test('overwriting incidents replaces the previous list', () => {
+		const store = new SnapshotStore(new MockMemento() as never);
+
+		store.saveIncidents([{
+			id: 'incident-1',
+			status: 'open' as const,
+			title: 'Incident 1',
+			openedAt: '2026-04-17T00:00:00.000Z',
+			updatedAt: '2026-04-17T00:00:00.000Z',
+			findings: [],
+			impactedFiles: [],
+			relatedFiles: [],
+		}]);
+
+		store.saveIncidents([{
+			id: 'incident-2',
+			status: 'resolved' as const,
+			title: 'Incident 2',
+			openedAt: '2026-04-17T00:00:00.000Z',
+			updatedAt: '2026-04-17T00:00:01.000Z',
+			resolvedAt: '2026-04-17T00:00:01.000Z',
+			findings: [],
+			impactedFiles: [],
+			relatedFiles: [],
+		}]);
+
+		const incidents = store.getIncidents();
+		assert.strictEqual(incidents.length, 1);
+		assert.strictEqual(incidents[0].id, 'incident-2');
+		assert.strictEqual(incidents[0].status, 'resolved');
 	});
 });

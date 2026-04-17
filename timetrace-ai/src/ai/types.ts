@@ -1,46 +1,76 @@
 export type AnalysisState = 'NORMAL' | 'WARNING' | 'ERROR';
-export type FindingSeverity = 'INFO' | 'WARNING' | 'ERROR';
-export type IncidentStatus = 'OPEN' | 'WATCHING' | 'RESOLVED';
 
-export interface StructuredFinding {
+// ---------------------------------------------------------------------------
+// Finding — one discrete issue detected in a single file save
+// ---------------------------------------------------------------------------
+
+export type FindingKind =
+	| 'syntax_error'
+	| 'undefined_identifier'
+	| 'null_check_removed'
+	| 'try_catch_removed'
+	| 'heavy_loop_added'
+	| 'complexity_spike'
+	| 'todo_hack_comment'
+	| 'export_signature_changed'
+	| 'downstream_impact';
+
+export type FindingSeverity = 'error' | 'warning' | 'info';
+
+export interface Finding {
+	/** Deterministic id: `${kind}:${filePath}:${lineRange?.[0] ?? 0}` */
 	id: string;
-	message: string;
+	kind: FindingKind;
 	severity: FindingSeverity;
+	message: string;
+	/** Human-readable explanation of why this finding was raised */
+	evidence: string;
+	/** 0..1 confidence that this is a real issue */
 	confidence: number;
-	lineRanges: number[][];
-	symbol?: string;
-}
-
-export interface ProbableRootCause {
-	id: string;
+	lineRange?: [number, number];
+	/** Exported name / function / variable most related to this finding */
+	relatedSymbol?: string;
 	filePath: string;
-	reason: string;
-	confidence: number;
-	linkedEvidence: string[];
-}
-
-export interface FileContextItem {
-	filePath: string;
-	reason: string;
-}
-
-export interface TimelineTrailPoint {
 	timestamp: string;
-	state: AnalysisState;
-	checkpoint: boolean;
-	score: number;
-	label: string;
 }
 
-export interface IncidentRecord {
+// ---------------------------------------------------------------------------
+// Incident — a persistent issue that spans multiple saves
+// ---------------------------------------------------------------------------
+
+export type IncidentStatus = 'open' | 'mitigated' | 'resolved';
+
+export interface Incident {
 	id: string;
-	summary: string;
 	status: IncidentStatus;
-	timelineTrail: TimelineTrailPoint[];
-	surfacedFile: string;
-	linkedFindings: string[];
-	probableCauses: string[];
+	title: string;
+	openedAt: string;
+	updatedAt: string;
+	resolvedAt?: string;
+	/** Finding ids that are currently supporting this incident */
+	findings: string[];
+	/** Files that may be affected by this incident */
+	impactedFiles: string[];
+	/** Files contextually tied to this analysis/incident */
+	relatedFiles: string[];
 }
+
+// ---------------------------------------------------------------------------
+// RootCauseCandidate — ranked, not certain
+// ---------------------------------------------------------------------------
+
+export interface RootCauseCandidate {
+	filePath: string;
+	relatedSymbol?: string;
+	/** 0..1 normalized confidence */
+	confidence: number;
+	/** Transparent signals driving the ranking */
+	signals: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Feature extraction types (extended)
+// ---------------------------------------------------------------------------
 
 export interface AnalyzeChangeInput {
 	filePath: string;
@@ -60,6 +90,14 @@ export interface FeatureSet {
 	heavyLoopAdded: boolean;
 	complexityDelta: number;
 	todoHackCommentAdded: boolean;
+	/** True when all changes are whitespace / comment only — suppress checkpoint noise */
+	cosmetic: boolean;
+	/** AST-extracted names that appeared in changed line ranges */
+	changedSymbols: string[];
+	/** Exported names whose signature changed between previous and current code */
+	exportedNamesChanged: string[];
+	/** Line ranges attributed to specific feature flags */
+	featureLineRanges: Partial<Record<FindingKind, [number, number]>>;
 	currentMetrics: {
 		complexity: number;
 		guardCount: number;
@@ -76,15 +114,7 @@ export interface FeatureSet {
 	};
 }
 
-export interface StructuredAnalysisOutput {
-	findings: StructuredFinding[];
-	probableRootCauses: ProbableRootCause[];
-	relatedFiles: FileContextItem[];
-	impactedFiles: FileContextItem[];
-	incidents: IncidentRecord[];
-}
-
-export interface AnalyzeChangeOutput extends StructuredAnalysisOutput {
+export interface AnalyzeChangeOutput {
 	state: AnalysisState;
 	score: number;
 	confidence?: number;
@@ -94,4 +124,9 @@ export interface AnalyzeChangeOutput extends StructuredAnalysisOutput {
 	analysis: string;
 	features: FeatureSet;
 	changedLineRanges: number[][];
+	findings: Finding[];
+	probableRootCauses: RootCauseCandidate[];
+	incidents: Incident[];
+	impactedFiles: string[];
+	relatedFiles: string[];
 }

@@ -1,13 +1,5 @@
-import { analyzeChange } from './analyzeChange';
-import type {
-	AnalyzeChangeInput,
-	AnalysisState,
-	FeatureSet,
-	FileContextItem,
-	IncidentRecord,
-	ProbableRootCause,
-	StructuredFinding,
-} from './types';
+import { analyzeChange, type AnalyzeChangeContext } from './analyzeChange';
+import type { AnalyzeChangeInput, AnalysisState, FeatureSet, Finding, Incident, RootCauseCandidate } from './types';
 
 /**
  * Canonical UI/integration entrypoint.
@@ -20,20 +12,23 @@ import type {
  *   previousCode,
  *   currentCode,
  *   previousState,
- * });
+ * }, context);
  *
  * Use:
- * - state for the severity badge
- * - checkpoint for timeline markers
- * - analysis + reasons for the explanation panel
- * - changedLineRanges for code highlighting
- * - features only for optional debug/details
+ * - state / score / checkpoint / reasons / analysis  → backward-compatible UI fields
+ * - findings                                         → structured per-issue details
+ * - probableRootCauses                               → ranked, not certain
+ * - incidents                                        → persistent lifecycle tracking
+ * - impactedFiles / relatedFiles                     → dependency-aware impact
+ * - changedLineRanges                                → code highlighting
+ * - features                                         → optional debug/details
  */
 export interface TimeTraceAnalysisInput extends AnalyzeChangeInput {
 	previousState?: AnalysisState;
 }
 
 export interface TimeTraceAnalysisResult {
+	// ---- Backward-compatible fields (do not remove or rename) ----
 	state: AnalysisState;
 	score: number;
 	checkpoint: boolean;
@@ -42,14 +37,18 @@ export interface TimeTraceAnalysisResult {
 	analysis: string;
 	changedLineRanges: number[][];
 	features: FeatureSet;
-	findings: StructuredFinding[];
-	probableRootCauses: ProbableRootCause[];
-	relatedFiles: FileContextItem[];
-	impactedFiles: FileContextItem[];
-	incidents: IncidentRecord[];
+	// ---- New structured fields ----
+	findings: Finding[];
+	probableRootCauses: RootCauseCandidate[];
+	incidents: Incident[];
+	impactedFiles: string[];
+	relatedFiles: string[];
 }
 
-export function runTimeTraceAnalysis(input: TimeTraceAnalysisInput): TimeTraceAnalysisResult {
-	const { confidence: _confidence, ...uiResult } = analyzeChange(input);
+export function runTimeTraceAnalysis(
+	input: TimeTraceAnalysisInput,
+	context?: AnalyzeChangeContext,
+): TimeTraceAnalysisResult {
+	const { confidence: _confidence, ...uiResult } = analyzeChange(input, context);
 	return uiResult;
 }
