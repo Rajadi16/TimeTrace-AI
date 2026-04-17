@@ -53,7 +53,17 @@ export interface Incident {
 	impactedFiles: string[];
 	/** Files contextually tied to this analysis/incident */
 	relatedFiles: string[];
+	// ---- V3 runtime-awareness fields ----
+	/** Runtime event ids linked to this incident */
+	runtimeEventIds?: string[];
+	/** True if any runtime event has confirmed this incident */
+	runtimeConfirmed?: boolean;
+	/** ISO timestamp of the most recent linked runtime event */
+	lastRuntimeEventAt?: string;
+	/** Count of linked runtime events */
+	runtimeEvidenceCount?: number;
 }
+
 
 // ---------------------------------------------------------------------------
 // RootCauseCandidate — ranked, not certain
@@ -129,4 +139,6 @@ export interface AnalyzeChangeOutput {
 	incidents: Incident[];
 	impactedFiles: string[];
 	relatedFiles: string[];
+	/** V3: runtime events (possibly enriched with correlation linkage) */
+	runtimeEvents?: import('./runtimeTypes').RuntimeEvent[];
 }
