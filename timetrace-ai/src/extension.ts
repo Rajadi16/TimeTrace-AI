@@ -1,6 +1,41 @@
 import * as vscode from 'vscode';
 import { runTimeTraceAnalysis } from './ai/runTimeTraceAnalysis';
 import { SnapshotStore } from './ai/snapshotStore';
+import type { TimeTraceAnalysisResult } from './ai';
+
+interface SidebarAnalysisPayload {
+	filePath: string;
+	timestamp: string;
+	state: TimeTraceAnalysisResult['state'];
+	score: number;
+	checkpoint: boolean;
+	previousState: TimeTraceAnalysisResult['previousState'];
+	reasons: string[];
+	analysis: string;
+	changedLineRanges: number[][];
+	features: TimeTraceAnalysisResult['features'];
+	codePreview: {
+		before: string[];
+		after: string[];
+		focusLine: number;
+	};
+}
+
+function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): SidebarAnalysisPayload['codePreview'] {
+	const previousLines = previousCode.split(/\r?\n/);
+	const currentLines = currentCode.split(/\r?\n/);
+	const firstRange = changedLineRanges[0] ?? [1, 1];
+	const startLine = Math.max(1, firstRange[0]);
+	const endLine = Math.max(startLine, firstRange[1]);
+	const previewStart = Math.max(1, startLine - 2);
+	const previewEnd = endLine + 2;
+
+	return {
+		before: previousLines.slice(previewStart - 1, previewEnd),
+		after: currentLines.slice(previewStart - 1, previewEnd),
+		focusLine: Math.max(1, startLine - previewStart + 1),
+	};
+}
 
 export function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
@@ -50,6 +85,19 @@ export function activate(context: vscode.ExtensionContext) {
 
 		outputChannel.appendLine(JSON.stringify(result, null, 2));
 		vscode.window.setStatusBarMessage(`TimeTrace AI: ${result.state} (${result.score})`, 4000);
+		provider.publishAnalysis({
+			filePath: document.uri.fsPath,
+			timestamp: new Date().toISOString(),
+			state: result.state,
+			score: result.score,
+			checkpoint: result.checkpoint,
+			previousState: result.previousState,
+			reasons: result.reasons,
+			analysis: result.analysis,
+			changedLineRanges: result.changedLineRanges,
+			features: result.features,
+			codePreview: buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges),
+		});
 		if (result.checkpoint) {
 			void vscode.window.showInformationMessage(`TimeTrace AI checkpoint: ${result.analysis}`);
 		}
@@ -115,10 +163,23 @@ export function deactivate() {}
 
 class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 	public static readonly viewType = 'timetraceAi.sidebar';
+	private webviewView: vscode.WebviewView | undefined;
 
 	public constructor(private readonly extensionUri: vscode.Uri) {}
 
+	public publishAnalysis(payload: SidebarAnalysisPayload): void {
+		if (!this.webviewView) {
+			return;
+		}
+
+		void this.webviewView.webview.postMessage({
+			type: 'analysisResult',
+			payload,
+		});
+	}
+
 	public resolveWebviewView(webviewView: vscode.WebviewView): void {
+		this.webviewView = webviewView;
 		const webview = webviewView.webview;
 		webview.options = {
 			enableScripts: true,

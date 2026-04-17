@@ -134,6 +134,11 @@
     typography: "mono"
   };
 
+  const liveDefaults = {
+    latencyTrace: [64, 72, 80, 93, 108, 126, 144, 169, 188],
+    impactFlow: ["Editor", "Analyzer", "Timeline"]
+  };
+
   const replayDurations = {
     slow: 960,
     normal: 680,
@@ -148,8 +153,68 @@
       elements.scenarioSelect.appendChild(option);
     });
 
+    window.addEventListener("message", (event) => {
+      handleExtensionMessage(event.data);
+    });
+
     attachListeners();
     setupRevealAnimations();
+    updateUI(true);
+  }
+
+  function handleExtensionMessage(message) {
+    if (!message || message.type !== "analysisResult" || !message.payload) {
+      return;
+    }
+
+    const payload = message.payload;
+    const stageByState = {
+      NORMAL: 0,
+      WARNING: 1,
+      ERROR: 2
+    };
+
+    const activeScenario = scenarios[0];
+    const reasonText = payload.reasons && payload.reasons.length
+      ? payload.reasons.join("; ")
+      : "No major risk signals detected.";
+    const firstRange = payload.changedLineRanges && payload.changedLineRanges.length
+      ? payload.changedLineRanges[0]
+      : undefined;
+    const changedLineText = firstRange ? `${firstRange[0]}-${firstRange[1]}` : "-";
+    const filename = (payload.filePath || "current file").split(/[\\/]/).pop();
+
+    scenarios[0] = {
+      ...activeScenario,
+      name: `Live: ${filename}`,
+      nodes: ["normal", "warning", "error"],
+      error: {
+        type: `${payload.state} (${payload.score})`,
+        line: changedLineText,
+        time: new Date(payload.timestamp).toLocaleTimeString()
+      },
+      rootCause: payload.analysis,
+      code: {
+        before: payload.codePreview?.before?.length ? payload.codePreview.before : activeScenario.code.before,
+        after: payload.codePreview?.after?.length ? payload.codePreview.after : activeScenario.code.after,
+        problemLine: payload.codePreview?.focusLine || 1
+      },
+      impactFlow: liveDefaults.impactFlow,
+      failingNode: payload.state === "ERROR" ? "Analyzer" : "Timeline",
+      latencyTrace: liveDefaults.latencyTrace,
+      analysis: {
+        summary: payload.analysis,
+        rootCause: reasonText,
+        impact: payload.checkpoint
+          ? `Checkpoint created. State changed from ${payload.previousState} to ${payload.state}.`
+          : `No checkpoint created. State remains ${payload.state}.`
+      }
+    };
+
+    state.scenarioIndex = 0;
+    state.stage = stageByState[payload.state] ?? 0;
+    state.codeState = "after";
+    elements.scenarioSelect.value = "0";
     updateUI(true);
   }
 
