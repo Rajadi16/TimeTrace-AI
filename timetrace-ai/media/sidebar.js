@@ -79,17 +79,12 @@
     }
   ];
 
-  const replayDurations = {
-    slow: 960,
-    normal: 680,
-    fast: 380
-  };
+  const replayDuration = 680;
+  const timelineStep = 56;
 
   const elements = {
     scenarioRow: document.getElementById("scenario-row"),
     scenarioSelect: document.getElementById("scenario-select"),
-    timelineSource: document.getElementById("timeline-source"),
-    timelineCount: document.getElementById("timeline-count"),
     timelineEmpty: document.getElementById("timeline-empty"),
     timelineStamps: document.getElementById("timeline-stamps"),
     headerStatePill: document.getElementById("header-state-pill"),
@@ -99,12 +94,12 @@
     timelineNodes: document.getElementById("timeline-nodes"),
     timelineProgress: document.getElementById("timeline-progress"),
     timelineInner: document.getElementById("timeline-inner"),
+    timelineStream: document.getElementById("timeline-stream"),
     timelinePlayPause: document.getElementById("timeline-play-pause"),
     timelinePlayPauseIcon: document.getElementById("timeline-play-pause-icon"),
     checkpointState: document.getElementById("checkpoint-state"),
     checkpointScore: document.getElementById("checkpoint-score"),
     checkpointTransition: document.getElementById("checkpoint-transition"),
-    checkpointMarker: document.getElementById("checkpoint-marker"),
     checkpointSummary: document.getElementById("checkpoint-summary"),
     checkpointTimestamp: document.getElementById("checkpoint-timestamp"),
     rootCard: document.getElementById("root-cause-card"),
@@ -114,19 +109,32 @@
     beforeTab: document.getElementById("before-tab"),
     afterTab: document.getElementById("after-tab"),
     findingsList: document.getElementById("findings-list"),
+    runtimeEventsList: document.getElementById("runtime-events-list"),
+    runtimeDetailType: document.getElementById("runtime-detail-type"),
+    runtimeDetailStatus: document.getElementById("runtime-detail-status"),
+    runtimeDetailMessage: document.getElementById("runtime-detail-message"),
+    runtimeDetailTime: document.getElementById("runtime-detail-time"),
+    runtimeDetailFile: document.getElementById("runtime-detail-file"),
+    runtimeDetailLine: document.getElementById("runtime-detail-line"),
+    runtimeDetailCheckpoint: document.getElementById("runtime-detail-checkpoint"),
+    runtimeDetailStack: document.getElementById("runtime-detail-stack"),
     incidentList: document.getElementById("incident-list"),
+    incidentDetailSummary: document.getElementById("incident-detail-summary"),
+    incidentDetailStatus: document.getElementById("incident-detail-status"),
+    incidentDetailRuntimeConfirmation: document.getElementById("incident-detail-runtime-confirmation"),
+    incidentDetailSeverity: document.getElementById("incident-detail-severity"),
+    incidentDetailFile: document.getElementById("incident-detail-file"),
+    incidentDetailCheckpoint: document.getElementById("incident-detail-checkpoint"),
+    incidentDetailRuntimeCount: document.getElementById("incident-detail-runtime-count"),
+    incidentDetailLastRuntime: document.getElementById("incident-detail-last-runtime"),
+    incidentDetailReason: document.getElementById("incident-detail-reason"),
+    incidentDetailFindings: document.getElementById("incident-detail-findings"),
+    incidentDetailCauses: document.getElementById("incident-detail-causes"),
+    incidentDetailRuntimeEvents: document.getElementById("incident-detail-runtime-events"),
     relatedFilesList: document.getElementById("related-files-list"),
     impactedFilesList: document.getElementById("impacted-files-list"),
     summary: document.getElementById("analysis-summary"),
-    jumpRoot: document.getElementById("jump-root"),
-    replayBtn: document.getElementById("replay"),
-    timelineReplay: document.getElementById("timeline-replay"),
     timelineRewind: document.getElementById("timeline-rewind"),
-    replaySpeed: document.getElementById("replay-speed"),
-    previousBtn: document.getElementById("previous"),
-    nextBtn: document.getElementById("next"),
-    themeToggle: document.getElementById("theme-toggle"),
-    fontToggle: document.getElementById("font-toggle"),
     timelineWrap: document.getElementById("timeline-wrap"),
     sparklinePath: document.getElementById("sparkline-path"),
     sparklineDot: document.getElementById("sparkline-dot"),
@@ -147,10 +155,11 @@
     replayTimer: undefined,
     isReplaying: false,
     theme: "auto",
-    replaySpeed: "normal",
     typography: "mono",
     sourceLabel: "Demo mode",
-    activePane: "overview"
+    activePane: "overview",
+    selectedIncidentId: undefined,
+    selectedRuntimeEventId: undefined
   };
 
   function init() {
@@ -191,31 +200,12 @@
       setCodeToggle();
     });
 
-    elements.jumpRoot.addEventListener("click", () => {
-      const selected = getSelectedEntry();
-      if (!selected) {
-        return;
-      }
-
-      if (selected.state !== "ERROR") {
-        const lastErrorIndex = getActiveEntries().findIndex((entry) => entry.state === "ERROR");
-        if (lastErrorIndex >= 0) {
-          selectCheckpoint(lastErrorIndex, { stopReplay: true });
-        }
-      }
-
-      elements.rootCard.scrollIntoView({ behavior: "smooth", block: "center" });
-      vscode.postMessage({ type: "jumpToRootCause" });
-    });
-
-    elements.previousBtn.addEventListener("click", () => shiftCheckpoint(-1));
-    elements.nextBtn.addEventListener("click", () => shiftCheckpoint(1));
-    elements.timelinePlayPause.addEventListener("click", toggleReplay);
-    elements.timelineRewind.addEventListener("click", () => shiftCheckpoint(-1));
-
-    elements.replaySpeed.addEventListener("change", (event) => {
-      appState.replaySpeed = event.target.value;
-    });
+    if (elements.timelinePlayPause) {
+      elements.timelinePlayPause.addEventListener("click", toggleReplay);
+    }
+    if (elements.timelineRewind) {
+      elements.timelineRewind.addEventListener("click", () => shiftCheckpoint(-1));
+    }
 
     elements.timelineWrap.addEventListener("scroll", () => {
       elements.timelineStamps.scrollLeft = elements.timelineWrap.scrollLeft;
@@ -224,9 +214,6 @@
     elements.timelineStamps.addEventListener("scroll", () => {
       elements.timelineWrap.scrollLeft = elements.timelineStamps.scrollLeft;
     });
-
-    elements.themeToggle.addEventListener("click", cycleTheme);
-    elements.fontToggle.addEventListener("click", cycleTypography);
 
     elements.paneButtons.forEach((button) => {
       button.addEventListener("click", () => {
@@ -252,8 +239,9 @@
 
       if (event.code === "Space") {
         event.preventDefault();
-        replayTimeline();
+        toggleReplay();
       }
+
     });
 
     // Intentionally no parallax: production mode favors stable layout.
@@ -266,8 +254,9 @@
 
     const payload = message.payload || message;
 
-    // Keep full history intact when analysisResult arrives without a history array.
-    // Otherwise, the timeline can collapse to a single "current" checkpoint.
+    // Preserve timeline history: analysisResult payloads usually contain only
+    // the latest analysis shape (no timelineHistory array). If we normalize
+    // that as a fresh history source, it collapses the timeline to one entry.
     const hasHistoryArray =
       Array.isArray(payload.timelineHistory) ||
       Array.isArray(payload.history) ||
@@ -354,6 +343,7 @@
       : [];
     const codePreview = rawEntry.codePreview || {};
     const score = Number(rawEntry.score);
+    const checkpointId = String(rawEntry.checkpointId || buildCheckpointId(rawEntry.filePath || filePath || "", rawEntry.timestamp || String(index)));
     const findings = Array.isArray(rawEntry.findings)
       ? rawEntry.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, changedLineRanges, reasons))
       : buildFallbackFindings(reasons, changedLineRanges, rawEntry.analysis);
@@ -366,9 +356,12 @@
     const impactedFiles = Array.isArray(rawEntry.impactedFiles)
       ? rawEntry.impactedFiles.map(normalizeFileContext).filter(Boolean)
       : [];
+    const runtimeEvents = Array.isArray(rawEntry.runtimeEvents)
+      ? rawEntry.runtimeEvents.map((item, eventIndex) => normalizeRuntimeEvent(item, eventIndex, rawEntry.filePath || filePath || "", checkpointId, rawEntry.timestamp, rawEntry.state, rawEntry.checkpoint, findings, probableRootCauses))
+      : buildFallbackRuntimeEvents(rawEntry.filePath || filePath || "", checkpointId, rawEntry.timestamp, rawEntry.state, rawEntry.checkpoint, findings, probableRootCauses, rawEntry.analysis);
     const incidents = Array.isArray(rawEntry.incidents)
-      ? rawEntry.incidents.map((item, incidentIndex) => normalizeIncident(item, incidentIndex, filePath, findings, probableRootCauses, score, rawEntry.previousState, rawEntry.state, rawEntry.timestamp, rawEntry.checkpoint))
-      : buildFallbackIncidents(filePath, reasons, findings, probableRootCauses, score, rawEntry.previousState, rawEntry.state, rawEntry.timestamp, rawEntry.checkpoint, rawEntry.analysis);
+      ? rawEntry.incidents.map((item, incidentIndex) => normalizeIncident(item, incidentIndex, filePath, findings, probableRootCauses, runtimeEvents, score, rawEntry.previousState, rawEntry.state, rawEntry.timestamp, rawEntry.checkpoint, checkpointId))
+      : buildFallbackIncidents(filePath, reasons, findings, probableRootCauses, runtimeEvents, score, rawEntry.previousState, rawEntry.state, rawEntry.timestamp, rawEntry.checkpoint, rawEntry.analysis, checkpointId);
 
     return {
       filePath: rawEntry.filePath || filePath || "",
@@ -376,6 +369,7 @@
       state: normalizeState(rawEntry.state),
       score: Number.isFinite(score) ? score : 0,
       checkpoint: Boolean(rawEntry.checkpoint),
+      checkpointId,
       previousState: normalizeState(rawEntry.previousState || rawEntry.previous || "NORMAL"),
       reasons,
       analysis: normalizeAnalysisText(rawEntry.analysis, reasons),
@@ -385,6 +379,7 @@
       probableRootCauses,
       relatedFiles,
       impactedFiles,
+      runtimeEvents,
       incidents,
       codePreview: {
         before: ensureLines(codePreview.before),
@@ -458,18 +453,6 @@
   }
 
   function normalizeFileContext(rawItem) {
-    if (typeof rawItem === "string") {
-      const filePathValue = rawItem.trim();
-      if (!filePathValue) {
-        return undefined;
-      }
-
-      return {
-        filePath: filePathValue,
-        reason: "Contextual file"
-      };
-    }
-
     if (!rawItem || typeof rawItem !== "object") {
       return undefined;
     }
@@ -485,45 +468,206 @@
     };
   }
 
-  function normalizeIncident(rawIncident, index, filePath, findings, probableRootCauses, score, previousState, state, timestamp, checkpoint) {
+  function normalizeIncident(rawIncident, index, filePath, findings, probableRootCauses, runtimeEvents, score, previousState, state, timestamp, checkpoint, checkpointId) {
     if (!rawIncident || typeof rawIncident !== "object") {
       return {
         id: `incident-${index + 1}`,
         summary: "Incident detail",
-        status: state === "ERROR" ? "OPEN" : state === "WARNING" ? "WATCHING" : "RESOLVED",
+        status: state === "ERROR" ? "OPEN" : state === "WARNING" ? "MITIGATED" : "RESOLVED",
+        runtimeConfirmationState: state === "ERROR" ? "RUNTIME_CONFIRMED" : state === "WARNING" ? "SUSPECTED" : "RESOLVED",
+        runtimeConfirmed: state === "ERROR",
+        statusReason: state === "ERROR"
+          ? "Runtime evidence confirms the incident is active."
+          : state === "WARNING"
+            ? "The issue is still active but severity is reduced."
+            : "Incident resolved.",
         timelineTrail: buildTrail(timestamp, previousState, state, score, checkpoint),
         surfacedFile: filePath || "",
+        linkedCheckpointId: checkpointId,
         linkedFindings: findings.map((finding) => finding.id),
-        probableCauses: probableRootCauses.map((cause) => cause.id)
+        probableCauses: probableRootCauses.map((cause) => cause.id),
+        linkedRuntimeEvents: runtimeEvents.map((event) => event.id),
+        lastRuntimeEventAt: runtimeEvents[0]?.timestamp,
+        evidenceCount: findings.length + runtimeEvents.length
       };
     }
+
+    const incidentStatus = normalizeIncidentStatus(rawIncident.status, state);
+    const runtimeConfirmationState = normalizeRuntimeConfirmationState(rawIncident.runtimeConfirmationState, state, Boolean(rawIncident.runtimeConfirmed));
 
     return {
       id: String(rawIncident.id || `incident-${index + 1}`),
       summary: String(rawIncident.summary || rawIncident.message || "Incident detail"),
-      status: normalizeIncidentStatus(rawIncident.status, state),
+      status: incidentStatus,
+      runtimeConfirmationState,
+      runtimeConfirmed: Boolean(rawIncident.runtimeConfirmed),
+      statusReason: String(rawIncident.statusReason || rawIncident.reason || (incidentStatus === "RESOLVED" ? "Incident resolved." : incidentStatus === "OPEN" ? "Incident remains active." : "Incident mitigated.")),
       timelineTrail: Array.isArray(rawIncident.timelineTrail) && rawIncident.timelineTrail.length > 0
         ? rawIncident.timelineTrail.map(normalizeTimelinePoint).filter(Boolean)
         : buildTrail(timestamp, previousState, state, score, checkpoint),
       surfacedFile: String(rawIncident.surfacedFile || rawIncident.filePath || filePath || ""),
+      linkedCheckpointId: String(rawIncident.linkedCheckpointId || checkpointId),
       linkedFindings: Array.isArray(rawIncident.linkedFindings) ? rawIncident.linkedFindings.map(String) : findings.map((finding) => finding.id),
-      probableCauses: Array.isArray(rawIncident.probableCauses) ? rawIncident.probableCauses.map(String) : probableRootCauses.map((cause) => cause.id)
+      probableCauses: Array.isArray(rawIncident.probableCauses) ? rawIncident.probableCauses.map(String) : probableRootCauses.map((cause) => cause.id),
+      linkedRuntimeEvents: Array.isArray(rawIncident.linkedRuntimeEvents) ? rawIncident.linkedRuntimeEvents.map(String) : runtimeEvents.map((event) => event.id),
+      lastRuntimeEventAt: rawIncident.lastRuntimeEventAt ? String(rawIncident.lastRuntimeEventAt) : runtimeEvents[0]?.timestamp,
+      evidenceCount: Number.isFinite(Number(rawIncident.evidenceCount)) ? Number(rawIncident.evidenceCount) : findings.length + runtimeEvents.length
     };
   }
 
-  function buildFallbackIncidents(filePath, reasons, findings, probableRootCauses, score, previousState, state, timestamp, checkpoint, analysis) {
-    const status = state === "ERROR" ? "OPEN" : state === "WARNING" ? "WATCHING" : "RESOLVED";
+  function buildFallbackIncidents(filePath, reasons, findings, probableRootCauses, runtimeEvents, score, previousState, state, timestamp, checkpoint, analysis, checkpointId) {
+    const status = state === "ERROR" ? "OPEN" : state === "WARNING" ? "MITIGATED" : "RESOLVED";
     return [
       {
         id: `incident-${filePath || "file"}-${timestamp}`,
         summary: normalizeAnalysisText(analysis, reasons),
         status,
+        runtimeConfirmationState: runtimeEvents.length > 0 ? (status === "OPEN" ? "RUNTIME_CONFIRMED" : status === "MITIGATED" ? "MITIGATED" : "RESOLVED") : (status === "RESOLVED" ? "RESOLVED" : "SUSPECTED"),
+        runtimeConfirmed: runtimeEvents.some((event) => event.runtimeConfirmed),
+        statusReason: status === "OPEN" ? "Runtime evidence confirms the issue is active." : status === "MITIGATED" ? "Issue remains active but is reduced by the current state." : "Incident resolved.",
         timelineTrail: buildTrail(timestamp, previousState, state, score, checkpoint),
         surfacedFile: filePath || "",
+        linkedCheckpointId: checkpointId,
         linkedFindings: findings.map((finding) => finding.id),
-        probableCauses: probableRootCauses.map((cause) => cause.id)
+        probableCauses: probableRootCauses.map((cause) => cause.id),
+        linkedRuntimeEvents: runtimeEvents.map((event) => event.id),
+        lastRuntimeEventAt: runtimeEvents[0]?.timestamp,
+        evidenceCount: findings.length + runtimeEvents.length
       }
     ];
+  }
+
+  function normalizeRuntimeEvent(rawEvent, index, filePath, checkpointId, timestamp, state, checkpoint, findings, probableRootCauses) {
+    if (!rawEvent || typeof rawEvent !== "object") {
+      return buildRuntimeEventFromState(filePath, checkpointId, timestamp, state, checkpoint, findings, probableRootCauses, index);
+    }
+
+    const stackPreview = Array.isArray(rawEvent.stackPreview)
+      ? rawEvent.stackPreview.map(String)
+      : Array.isArray(rawEvent.stack)
+        ? rawEvent.stack.map(String)
+        : [];
+
+    return {
+      id: String(rawEvent.id || `runtime-${index + 1}`),
+      eventType: normalizeRuntimeEventType(rawEvent.eventType),
+      message: String(rawEvent.message || rawEvent.summary || "Runtime event"),
+      timestamp: String(rawEvent.timestamp || timestamp),
+      severity: normalizeFindingSeverity(rawEvent.severity || rawEvent.level || "WARNING"),
+      filePath: rawEvent.filePath ? String(rawEvent.filePath) : filePath || undefined,
+      line: Number.isFinite(Number(rawEvent.line)) ? Number(rawEvent.line) : undefined,
+      stackPreview: stackPreview.length > 0 ? stackPreview : buildRuntimeStackPreview(String(rawEvent.message || "Runtime event"), checkpointId, filePath),
+      linkedCheckpointId: String(rawEvent.linkedCheckpointId || checkpointId),
+      linkedIncidentId: rawEvent.linkedIncidentId ? String(rawEvent.linkedIncidentId) : undefined,
+      runtimeConfirmed: Boolean(rawEvent.runtimeConfirmed),
+      confirmationState: normalizeRuntimeConfirmationState(rawEvent.confirmationState, state, Boolean(rawEvent.runtimeConfirmed)),
+      evidenceCount: Number.isFinite(Number(rawEvent.evidenceCount)) ? Number(rawEvent.evidenceCount) : Math.max(1, findings.length + probableRootCauses.length)
+    };
+  }
+
+  function buildFallbackRuntimeEvents(filePath, checkpointId, timestamp, state, checkpoint, findings, probableRootCauses, analysis) {
+    if (state === "NORMAL" && !checkpoint) {
+      return [];
+    }
+
+    const eventType = state === "ERROR"
+      ? "RUNTIME_ERROR"
+      : state === "WARNING"
+        ? "NETWORK_FAILURE"
+        : "CONSOLE_ERROR";
+    const runtimeConfirmed = state === "ERROR" || checkpoint;
+    return [
+      {
+        id: `runtime-${checkpointId}`,
+        eventType,
+        message: normalizeRuntimeEventMessage(eventType, analysis),
+        timestamp,
+        severity: state === "ERROR" ? "ERROR" : "WARNING",
+        filePath,
+        line: changedLineFromFindings(findings),
+        stackPreview: buildRuntimeStackPreview(normalizeRuntimeEventMessage(eventType, analysis), checkpointId, filePath),
+        linkedCheckpointId: checkpointId,
+        linkedIncidentId: `incident-${timestamp}`,
+        runtimeConfirmed,
+        confirmationState: runtimeConfirmed ? "RUNTIME_CONFIRMED" : state === "WARNING" ? "SUSPECTED" : "MITIGATED",
+        evidenceCount: Math.max(1, findings.length + probableRootCauses.length)
+      }
+    ];
+  }
+
+  function buildRuntimeEventFromState(filePath, checkpointId, timestamp, state, checkpoint, findings, probableRootCauses, index) {
+    return {
+      id: `runtime-${index + 1}-${checkpointId}`,
+      eventType: state === "ERROR" ? "RUNTIME_ERROR" : state === "WARNING" ? "CONSOLE_ERROR" : "NETWORK_FAILURE",
+      message: normalizeRuntimeEventMessage(state === "ERROR" ? "RUNTIME_ERROR" : "CONSOLE_ERROR", `State ${state}`),
+      timestamp,
+      severity: state === "ERROR" ? "ERROR" : "WARNING",
+      filePath,
+      line: changedLineFromFindings(findings),
+      stackPreview: buildRuntimeStackPreview(`State ${state}`, checkpointId, filePath),
+      linkedCheckpointId: checkpointId,
+      linkedIncidentId: `incident-${timestamp}`,
+      runtimeConfirmed: state === "ERROR" || checkpoint,
+      confirmationState: state === "ERROR" ? "RUNTIME_CONFIRMED" : state === "WARNING" ? "SUSPECTED" : "MITIGATED",
+      evidenceCount: Math.max(1, findings.length + probableRootCauses.length)
+    };
+  }
+
+  function normalizeRuntimeEventType(value) {
+    const normalized = String(value || "CONSOLE_ERROR").toUpperCase();
+    if (normalized === "RUNTIME_ERROR" || normalized === "UNHANDLED_REJECTION" || normalized === "CONSOLE_ERROR" || normalized === "NETWORK_FAILURE") {
+      return normalized;
+    }
+
+    return "CONSOLE_ERROR";
+  }
+
+  function normalizeRuntimeConfirmationState(value, state, runtimeConfirmed) {
+    const normalized = String(value || "").toUpperCase();
+    if (normalized === "SUSPECTED" || normalized === "RUNTIME_CONFIRMED" || normalized === "MITIGATED" || normalized === "RESOLVED") {
+      return normalized;
+    }
+
+    if (runtimeConfirmed) {
+      return "RUNTIME_CONFIRMED";
+    }
+
+    return state === "NORMAL" ? "RESOLVED" : "SUSPECTED";
+  }
+
+  function normalizeRuntimeEventMessage(eventType, analysis) {
+    if (eventType === "RUNTIME_ERROR") {
+      return `Runtime error: ${analysis}`;
+    }
+
+    if (eventType === "UNHANDLED_REJECTION") {
+      return `Unhandled promise rejection: ${analysis}`;
+    }
+
+    if (eventType === "NETWORK_FAILURE") {
+      return `Network/API failure: ${analysis}`;
+    }
+
+    return `Console error: ${analysis}`;
+  }
+
+  function buildRuntimeStackPreview(message, checkpointId, filePath) {
+    const fileName = filePath ? filePath.split(/[\\/]/).pop() : "runtime";
+    return [
+      message,
+      `at ${fileName}`,
+      `linked checkpoint ${checkpointId}`
+    ];
+  }
+
+  function changedLineFromFindings(findings) {
+    const firstFinding = findings[0];
+    const firstRange = firstFinding && Array.isArray(firstFinding.lineRanges) ? firstFinding.lineRanges[0] : undefined;
+    return firstRange && Number.isFinite(Number(firstRange[0])) ? Number(firstRange[0]) : 1;
+  }
+
+  function buildCheckpointId(filePath, timestamp) {
+    return `${filePath}::${timestamp}`.replace(/[^A-Za-z0-9_-]/g, '-');
   }
 
   function normalizeTimelinePoint(point) {
@@ -564,11 +708,11 @@
 
   function normalizeIncidentStatus(status, fallbackState) {
     const normalized = String(status || "").toUpperCase();
-    if (normalized === "OPEN" || normalized === "WATCHING" || normalized === "RESOLVED") {
+    if (normalized === "OPEN" || normalized === "MITIGATED" || normalized === "RESOLVED") {
       return normalized;
     }
 
-    return fallbackState === "ERROR" ? "OPEN" : fallbackState === "WARNING" ? "WATCHING" : "RESOLVED";
+    return fallbackState === "ERROR" ? "OPEN" : fallbackState === "WARNING" ? "MITIGATED" : "RESOLVED";
   }
 
   function normalizeLineRanges(lineRanges, fallbackRanges) {
@@ -598,7 +742,9 @@
     const impactedFiles = buildDemoImpactedFiles(scenario.name);
     const findings = buildDemoFindings(scenario);
     const probableRootCauses = buildDemoRootCauses(scenario, findings);
-    const incidents = buildDemoIncidents(scenario, findings, probableRootCauses);
+    const checkpointIds = [0, 1, 2, 3].map((index) => buildCheckpointId(`src/${scenario.name.toLowerCase().replace(/\s+/g, "-")}.ts`, `demo-${scenario.name}-${index}`));
+    const runtimeEvents = buildDemoRuntimeEvents(scenario, checkpointIds);
+    const incidents = buildDemoIncidents(scenario, findings, probableRootCauses, runtimeEvents, checkpointIds);
 
     return [
       {
@@ -614,12 +760,16 @@
         codePreview: scenario.code,
         findings: [],
         probableRootCauses: [],
+        checkpointId: checkpointIds[0],
         relatedFiles,
         impactedFiles,
+        runtimeEvents: [],
         incidents: buildDemoIncidents(
           scenario,
           [{ id: "finding-baseline", message: "Baseline snapshot captured.", severity: "INFO", confidence: 0.91, lineRanges: [[1, 1]] }],
-          [{ id: "root-cause-baseline", filePath: scenario.name, reason: "No regression detected yet.", confidence: 0.95, linkedEvidence: ["finding-baseline"] }]
+          [{ id: "root-cause-baseline", filePath: scenario.name, reason: "No regression detected yet.", confidence: 0.95, linkedEvidence: ["finding-baseline"] }],
+          [],
+          checkpointIds
         )
       },
       {
@@ -635,8 +785,10 @@
         codePreview: scenario.code,
         findings: findings.slice(0, 1),
         probableRootCauses: probableRootCauses.slice(0, 1),
+        checkpointId: checkpointIds[1],
         relatedFiles,
         impactedFiles,
+        runtimeEvents: runtimeEvents.slice(0, 1),
         incidents: incidents.slice(0, 1)
       },
       {
@@ -652,8 +804,10 @@
         codePreview: scenario.code,
         findings: findings.slice(0, 2),
         probableRootCauses: probableRootCauses.slice(0, 2),
+        checkpointId: checkpointIds[2],
         relatedFiles,
         impactedFiles,
+        runtimeEvents,
         incidents
       },
       {
@@ -669,8 +823,10 @@
         codePreview: scenario.code,
         findings,
         probableRootCauses,
+        checkpointId: checkpointIds[3],
         relatedFiles,
         impactedFiles,
+        runtimeEvents,
         incidents
       }
     ];
@@ -758,20 +914,71 @@
     ];
   }
 
-  function buildDemoIncidents(scenario, findings, probableRootCauses) {
+  function buildDemoRuntimeEvents(scenario, checkpointIds) {
+    const baseFile = `src/${scenario.name.toLowerCase().replace(/\s+/g, "-")}.ts`;
+    return [
+      {
+        id: `runtime-${scenario.name.toLowerCase().replace(/\s+/g, "-")}-1`,
+        eventType: "NETWORK_FAILURE",
+        message: `${scenario.analysis.summary} API request failed at runtime.`,
+        timestamp: new Date(Date.now() - 82000).toISOString(),
+        severity: "ERROR",
+        filePath: baseFile,
+        line: scenario.changedLineRanges[0]?.[0] || 1,
+        stackPreview: [
+          "Network/API failure",
+          `at ${baseFile}: ${scenario.changedLineRanges[0]?.[0] || 1}`,
+          `linked checkpoint ${checkpointIds[1]}`
+        ],
+        linkedCheckpointId: checkpointIds[1],
+        linkedIncidentId: `incident-${scenario.name.toLowerCase().replace(/\s+/g, "-")}`,
+        runtimeConfirmed: true,
+        confirmationState: "RUNTIME_CONFIRMED",
+        evidenceCount: 3
+      },
+      {
+        id: `runtime-${scenario.name.toLowerCase().replace(/\s+/g, "-")}-2`,
+        eventType: "CONSOLE_ERROR",
+        message: "Console error surfaced during follow-up execution.",
+        timestamp: new Date(Date.now() - 38000).toISOString(),
+        severity: "WARNING",
+        filePath: baseFile,
+        line: scenario.changedLineRanges[0]?.[0] || 1,
+        stackPreview: [
+          "Console error",
+          `at ${baseFile}: ${scenario.changedLineRanges[0]?.[0] || 1}`,
+          `linked checkpoint ${checkpointIds[2]}`
+        ],
+        linkedCheckpointId: checkpointIds[2],
+        linkedIncidentId: `incident-${scenario.name.toLowerCase().replace(/\s+/g, "-")}`,
+        runtimeConfirmed: false,
+        confirmationState: "SUSPECTED",
+        evidenceCount: 2
+      }
+    ];
+  }
+
+  function buildDemoIncidents(scenario, findings, probableRootCauses, runtimeEvents, checkpointIds) {
     return [
       {
         id: `incident-${scenario.name.toLowerCase().replace(/\s+/g, "-")}`,
         summary: scenario.analysis.summary,
         status: "OPEN",
+        runtimeConfirmationState: runtimeEvents.length > 0 ? "RUNTIME_CONFIRMED" : "SUSPECTED",
+        runtimeConfirmed: runtimeEvents.some((event) => event.runtimeConfirmed),
+        statusReason: runtimeEvents.length > 0 ? "Runtime evidence confirms the issue is still active." : "Static analysis only.",
         timelineTrail: [
           { timestamp: new Date(Date.now() - 150000).toISOString(), state: "NORMAL", checkpoint: false, score: 16, label: "Baseline" },
           { timestamp: new Date(Date.now() - 70000).toISOString(), state: "WARNING", checkpoint: false, score: 42, label: "Risk surfaced" },
           { timestamp: new Date().toISOString(), state: "ERROR", checkpoint: true, score: 91, label: "Checkpoint" }
         ],
         surfacedFile: `src/${scenario.name.toLowerCase().replace(/\s+/g, "-")}.ts`,
+        linkedCheckpointId: checkpointIds[3],
         linkedFindings: findings.map((finding) => finding.id),
-        probableCauses: probableRootCauses.map((cause) => cause.id)
+        probableCauses: probableRootCauses.map((cause) => cause.id),
+        linkedRuntimeEvents: runtimeEvents.map((event) => event.id),
+        lastRuntimeEventAt: runtimeEvents[0]?.timestamp,
+        evidenceCount: findings.length + runtimeEvents.length
       }
     ];
   }
@@ -908,11 +1115,13 @@
     updateTransportControls();
     elements.panel.classList.add("motion-blur");
     elements.timelineWrap.classList.add("replaying");
-    appState.selectedIndex = 0;
+    if (appState.selectedIndex >= entries.length - 1) {
+      appState.selectedIndex = 0;
+    }
     updateView({ animateText: false });
     focusSelectedCheckpoint("center");
 
-    let index = 0;
+    let index = appState.selectedIndex;
     appState.replayTimer = setInterval(() => {
       if (index >= entries.length - 1) {
         appState.replayTimer = clearTimer(appState.replayTimer);
@@ -927,7 +1136,7 @@
       appState.selectedIndex = index;
       updateView({ animateText: false });
       focusSelectedCheckpoint("center");
-    }, replayDurations[appState.replaySpeed]);
+    }, replayDuration);
   }
 
   function toggleReplay() {
@@ -959,8 +1168,6 @@
     const entries = getActiveEntries();
     const selected = getSelectedEntry();
 
-    elements.timelineSource.textContent = appState.sourceLabel;
-    elements.timelineCount.textContent = entries.length ? `${entries.length} checkpoint${entries.length === 1 ? "" : "s"}` : "";
     elements.timelineEmpty.classList.toggle("hidden", entries.length > 0);
     elements.timelineWrap.classList.toggle("hidden", entries.length === 0);
     applyPaneVisibility();
@@ -980,7 +1187,10 @@
     updateCheckpointDetails(selected);
     renderFindings(selected.findings);
     renderRootCauseCandidates(selected.probableRootCauses);
-    renderIncidentList(selected.incidents, selected);
+  renderRuntimeEvents(selected.runtimeEvents, selected);
+  renderIncidentList(selected.incidents, selected);
+  renderIncidentDetail(selected, getSelectedIncident(selected));
+  renderUnifiedTimeline(entries);
     renderFileContext(selected.relatedFiles, selected.impactedFiles);
     updateCode(selected);
     setCodeToggle();
@@ -990,15 +1200,19 @@
 
   function renderEmptyPanels() {
     elements.checkpointState.textContent = "WAITING";
+    elements.checkpointState.className = "checkpoint-state-value";
     elements.checkpointScore.textContent = "0";
     elements.checkpointTransition.textContent = "Awaiting checkpoint";
-    elements.checkpointMarker.textContent = "No";
     elements.checkpointSummary.textContent = "Save the file again or let the backend publish history to populate the structured debugger panels.";
     elements.checkpointTimestamp.textContent = "No checkpoint history yet.";
     elements.rootCard.classList.remove("hidden");
     elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
     elements.findingsList.innerHTML = '<div class="empty-state">No findings yet.</div>';
+    elements.runtimeEventsList.innerHTML = '<div class="empty-state">No runtime events captured yet.</div>';
+    elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
     elements.incidentList.innerHTML = '<div class="empty-state">No incidents yet.</div>';
+    renderEmptyRuntimeDetail();
+    renderEmptyIncidentDetail();
     elements.relatedFilesList.innerHTML = '<div class="empty-state">No related files yet.</div>';
     elements.impactedFilesList.innerHTML = '<div class="empty-state">No impacted files yet.</div>';
     elements.changedLines.innerHTML = '<span class="impact-chip">No changed lines yet</span>';
@@ -1045,11 +1259,10 @@
   }
 
   function updateTimelineGeometry(entryCount) {
-    const step = 56;
     const minWidth = Math.max(260, elements.timelineWrap.clientWidth - 2);
-    const calculatedWidth = Math.max(minWidth, 40 + Math.max(0, entryCount - 1) * step + 24);
+    const calculatedWidth = Math.max(minWidth, 40 + Math.max(0, entryCount - 1) * timelineStep + 24);
     elements.timelineInner.style.width = `${calculatedWidth}px`;
-    elements.timelineStamps.style.setProperty("--stamp-width", `${step}px`);
+    elements.timelineStamps.style.setProperty("--stamp-width", `${timelineStep}px`);
   }
 
   function renderTimelineStamps(entries) {
@@ -1074,15 +1287,24 @@
   }
 
   function focusSelectedCheckpoint(behavior) {
-    const selectedNode = elements.timelineNodes.querySelector(".node.active");
-    const selectedStamp = elements.timelineStamps.querySelector(".stamp.active");
+    const scrollBehavior = behavior === "center" ? "smooth" : "auto";
+    scrollTimelineToIndex(appState.selectedIndex, scrollBehavior);
+  }
 
-    if (selectedNode && typeof selectedNode.scrollIntoView === "function") {
-      selectedNode.scrollIntoView({ inline: "center", block: "nearest", behavior });
+  function scrollTimelineToIndex(index, behavior) {
+    const targetCenter = 16 + (index * timelineStep);
+    const targetLeft = Math.max(0, targetCenter - (elements.timelineWrap.clientWidth / 2));
+
+    if (typeof elements.timelineWrap.scrollTo === "function") {
+      elements.timelineWrap.scrollTo({ left: targetLeft, behavior });
+    } else {
+      elements.timelineWrap.scrollLeft = targetLeft;
     }
 
-    if (selectedStamp && typeof selectedStamp.scrollIntoView === "function") {
-      selectedStamp.scrollIntoView({ inline: "center", block: "nearest", behavior });
+    if (typeof elements.timelineStamps.scrollTo === "function") {
+      elements.timelineStamps.scrollTo({ left: targetLeft, behavior });
+    } else {
+      elements.timelineStamps.scrollLeft = targetLeft;
     }
   }
 
@@ -1099,9 +1321,9 @@
 
   function updateCheckpointDetails(entry) {
     elements.checkpointState.textContent = entry.state;
+    elements.checkpointState.className = `checkpoint-state-value ${stateClass(entry.state)}`;
     elements.checkpointScore.textContent = `${entry.score}`;
     elements.checkpointTransition.textContent = `${entry.previousState} → ${entry.state}`;
-    elements.checkpointMarker.textContent = entry.checkpoint ? "Yes" : "No";
     elements.checkpointSummary.textContent = entry.analysis;
     elements.checkpointTimestamp.textContent = entry.timestamp;
     elements.rootCard.classList.remove("hidden");
@@ -1172,10 +1394,205 @@
       .join("");
   }
 
-  function renderIncidentList(incidents, selected) {
+  function renderRuntimeEvents(runtimeEvents, selectedEntry) {
+    if (!Array.isArray(runtimeEvents) || runtimeEvents.length === 0) {
+      elements.runtimeEventsList.innerHTML = '<div class="empty-state">No runtime events captured yet. This incident is currently based on static analysis only.</div>';
+      renderEmptyRuntimeDetail();
+      return;
+    }
+
+    elements.runtimeEventsList.innerHTML = runtimeEvents
+      .map((event) => {
+        const selected = appState.selectedRuntimeEventId ? appState.selectedRuntimeEventId === event.id : runtimeEvents[0]?.id === event.id;
+        const confirmedClass = runtimeConfirmationClass(event.confirmationState, event.runtimeConfirmed);
+        const checkpointLabel = event.linkedCheckpointId ? event.linkedCheckpointId : "No checkpoint linked";
+        return `
+          <button class="runtime-event-item ${selected ? "selected" : ""}" type="button" data-runtime-event-id="${escapeHtml(event.id)}">
+            <div class="finding-topline">
+              <strong>${escapeHtml(String(event.eventType).replace(/_/g, " "))}</strong>
+              <span class="mini-pill ${confirmedClass}">${escapeHtml(runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed))}</span>
+            </div>
+            <p>${escapeHtml(String(event.message))}</p>
+            <div class="finding-meta">
+              <span>${escapeHtml(formatRuntimeLocation(event))}</span>
+              <span>${escapeHtml(checkpointLabel)}</span>
+            </div>
+          </button>
+        `;
+      })
+      .join("");
+
+    elements.runtimeEventsList.querySelectorAll("[data-runtime-event-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const eventId = button.getAttribute("data-runtime-event-id");
+        if (!eventId) {
+          return;
+        }
+
+        appState.selectedRuntimeEventId = eventId;
+        renderRuntimeEvents(runtimeEvents, selectedEntry);
+        renderRuntimeEventDetail(runtimeEvents.find((event) => event.id === eventId));
+        const linkedIncident = findIncidentForRuntimeEvent(selectedEntry, eventId);
+        if (linkedIncident) {
+          appState.selectedIncidentId = linkedIncident.id;
+          if (Array.isArray(selectedEntry.incidents)) {
+            renderIncidentList(selectedEntry.incidents, selectedEntry);
+          }
+          renderIncidentDetail(selectedEntry, linkedIncident);
+        }
+      });
+    });
+
+    const selectedEvent = runtimeEvents.find((event) => event.id === appState.selectedRuntimeEventId) || runtimeEvents[0];
+    if (selectedEvent && appState.selectedRuntimeEventId !== selectedEvent.id) {
+      appState.selectedRuntimeEventId = selectedEvent.id;
+    }
+    renderRuntimeEventDetail(selectedEvent);
+  }
+
+  function renderRuntimeEventDetail(event) {
+    if (!event) {
+      renderEmptyRuntimeDetail();
+      return;
+    }
+
+    elements.runtimeDetailType.textContent = String(event.eventType).replace(/_/g, " ");
+    elements.runtimeDetailStatus.textContent = runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed);
+    elements.runtimeDetailMessage.textContent = event.message;
+    elements.runtimeDetailTime.textContent = event.timestamp || "-";
+    elements.runtimeDetailFile.textContent = event.filePath || "-";
+    elements.runtimeDetailLine.textContent = event.line ? `L${event.line}` : "-";
+    elements.runtimeDetailCheckpoint.textContent = event.linkedCheckpointId || "-";
+    elements.runtimeDetailStack.textContent = Array.isArray(event.stackPreview) && event.stackPreview.length > 0
+      ? event.stackPreview.join("\n")
+      : "No stack trace captured yet.";
+  }
+
+  function renderEmptyRuntimeDetail() {
+    elements.runtimeDetailType.textContent = "No event selected";
+    elements.runtimeDetailStatus.textContent = "Waiting";
+    elements.runtimeDetailMessage.textContent = "Select a runtime event to inspect stack details and checkpoint links.";
+    elements.runtimeDetailTime.textContent = "-";
+    elements.runtimeDetailFile.textContent = "-";
+    elements.runtimeDetailLine.textContent = "-";
+    elements.runtimeDetailCheckpoint.textContent = "-";
+    elements.runtimeDetailStack.textContent = "No runtime stack captured yet.";
+  }
+
+  function renderUnifiedTimeline(entries) {
+    const selectedEntry = getSelectedEntry();
+    if (!selectedEntry) {
+      elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
+      return;
+    }
+
+    const selectedTimelineItem = {
+      kind: "checkpoint",
+      id: selectedEntry.checkpointId || buildCheckpointId(selectedEntry.filePath, selectedEntry.timestamp),
+      title: `${selectedEntry.state} checkpoint`,
+      message: selectedEntry.analysis,
+      subtitle: `${selectedEntry.previousState} → ${selectedEntry.state} · ${selectedEntry.checkpoint ? "checkpoint" : "save"}`,
+      timestampLabel: selectedEntry.timestamp,
+      timestampValue: new Date(selectedEntry.timestamp).getTime() || 0,
+      state: selectedEntry.state
+    };
+
+    elements.timelineStream.innerHTML = `
+      <button class="timeline-item selected" type="button" data-timeline-kind="checkpoint" data-timeline-id="${escapeHtml(selectedTimelineItem.id)}">
+        <span class="timeline-item-marker ${stateClass(selectedTimelineItem.state)}"></span>
+        <div class="timeline-item-body">
+          <div class="finding-topline">
+            <strong>${escapeHtml(selectedTimelineItem.title)}</strong>
+            <span class="mini-pill">${escapeHtml(selectedTimelineItem.timestampLabel)}</span>
+          </div>
+          <p>${escapeHtml(selectedTimelineItem.message)}</p>
+          <div class="finding-meta">
+            <span>${escapeHtml(selectedTimelineItem.subtitle)}</span>
+          </div>
+        </div>
+      </button>
+    `;
+
+    elements.timelineStream.querySelectorAll("[data-timeline-kind]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const kind = button.getAttribute("data-timeline-kind");
+        const id = button.getAttribute("data-timeline-id");
+        if (!kind || !id) {
+          return;
+        }
+
+        if (kind === "checkpoint") {
+          const checkpointIndex = entries.findIndex((entry) => entry.checkpointId === id || buildCheckpointId(entry.filePath, entry.timestamp) === id);
+          if (checkpointIndex >= 0) {
+            selectCheckpoint(checkpointIndex, { stopReplay: true });
+          }
+          return;
+        }
+
+        const runtimeEvent = entries.flatMap((entry) => Array.isArray(entry.runtimeEvents) ? entry.runtimeEvents : []).find((event) => event.id === id);
+        if (runtimeEvent) {
+          appState.selectedRuntimeEventId = runtimeEvent.id;
+          const selectedEntry = getSelectedEntry();
+          renderRuntimeEventDetail(runtimeEvent);
+          if (selectedEntry) {
+            const selectedIncident = findIncidentForRuntimeEvent(selectedEntry, runtimeEvent.id);
+            if (selectedIncident) {
+              appState.selectedIncidentId = selectedIncident.id;
+              renderIncidentDetail(selectedEntry, selectedIncident);
+            }
+          }
+          applyPaneVisibility();
+        }
+      });
+    });
+  }
+
+  function renderIncidentDetail(entry, incident) {
+    const selectedIncident = incident || getSelectedIncident(entry);
+    if (!selectedIncident) {
+      renderEmptyIncidentDetail();
+      return;
+    }
+
+    appState.selectedIncidentId = selectedIncident.id;
+    elements.incidentDetailSummary.textContent = selectedIncident.summary;
+    elements.incidentDetailStatus.textContent = normalizeIncidentStatusLabel(selectedIncident.status);
+    elements.incidentDetailRuntimeConfirmation.textContent = runtimeConfirmationLabel(selectedIncident.runtimeConfirmationState, selectedIncident.runtimeConfirmed);
+    elements.incidentDetailSeverity.textContent = `${entry.state} · ${selectedIncident.statusReason}`;
+    elements.incidentDetailFile.textContent = selectedIncident.surfacedFile || "-";
+    elements.incidentDetailCheckpoint.textContent = selectedIncident.linkedCheckpointId || entry.checkpointId || "-";
+    elements.incidentDetailRuntimeCount.textContent = String(selectedIncident.evidenceCount || 0);
+    elements.incidentDetailLastRuntime.textContent = selectedIncident.lastRuntimeEventAt || "-";
+    elements.incidentDetailReason.textContent = selectedIncident.statusReason || selectedIncident.summary;
+    elements.incidentDetailFindings.innerHTML = renderLinkedChips(selectedIncident.linkedFindings, selectedIncident.linkedFindings.length ? "finding" : "none");
+    elements.incidentDetailCauses.innerHTML = renderLinkedChips(selectedIncident.probableCauses, selectedIncident.probableCauses.length ? "cause" : "none");
+    elements.incidentDetailRuntimeEvents.innerHTML = renderLinkedChips(selectedIncident.linkedRuntimeEvents, selectedIncident.linkedRuntimeEvents.length ? "runtime" : "none");
+  }
+
+  function renderEmptyIncidentDetail() {
+    elements.incidentDetailSummary.textContent = "No incident selected";
+    elements.incidentDetailStatus.textContent = "Waiting";
+    elements.incidentDetailRuntimeConfirmation.textContent = "Suspected";
+    elements.incidentDetailSeverity.textContent = "No incident selected";
+    elements.incidentDetailFile.textContent = "-";
+    elements.incidentDetailCheckpoint.textContent = "-";
+    elements.incidentDetailRuntimeCount.textContent = "0";
+    elements.incidentDetailLastRuntime.textContent = "-";
+    elements.incidentDetailReason.textContent = "Select an incident to inspect linked findings, runtime evidence, and file context.";
+    elements.incidentDetailFindings.innerHTML = '<div class="empty-state">No findings linked yet.</div>';
+    elements.incidentDetailCauses.innerHTML = '<div class="empty-state">No root-cause candidates linked yet.</div>';
+    elements.incidentDetailRuntimeEvents.innerHTML = '<div class="empty-state">No runtime evidence linked yet.</div>';
+  }
+
+  function renderIncidentList(incidents, selectedEntry) {
     if (!Array.isArray(incidents) || incidents.length === 0) {
       elements.incidentList.innerHTML = '<div class="empty-state">No incidents yet.</div>';
+      renderEmptyIncidentDetail();
       return;
+    }
+
+    if (!appState.selectedIncidentId || !incidents.some((incident) => incident.id === appState.selectedIncidentId)) {
+      appState.selectedIncidentId = incidents[0].id;
     }
 
     elements.incidentList.innerHTML = incidents
@@ -1183,21 +1600,18 @@
         const trail = Array.isArray(incident.timelineTrail)
           ? incident.timelineTrail.map((point) => `<span class="trail-chip ${stateClass(point.state)}">${escapeHtml(String(point.label || point.state))}</span>`).join("")
           : "";
-        const linkedFindings = Array.isArray(incident.linkedFindings) ? incident.linkedFindings.join(", ") : "";
-        const linkedCauses = Array.isArray(incident.probableCauses) ? incident.probableCauses.join(", ") : "";
-        const statusClass = String(incident.status || "WATCHING").toLowerCase();
-        const isSelected = selected && selected.incidents && selected.incidents[0] && selected.incidents[0].id === incident.id;
+        const isSelected = appState.selectedIncidentId === incident.id;
         return `
           <button class="incident-item ${isSelected ? "selected" : ""}" type="button" data-incident-index="${index}">
             <div class="finding-topline">
               <strong>${escapeHtml(String(incident.summary || "Incident"))}</strong>
-              <span class="mini-pill incident-${statusClass}">${escapeHtml(String(incident.status || "WATCHING"))}</span>
+              <span class="mini-pill ${incidentStatusClass(incident.status)}">${escapeHtml(normalizeIncidentStatusLabel(incident.status))}</span>
             </div>
             <p>${escapeHtml(String(incident.surfacedFile || ""))}</p>
             <div class="trail-row">${trail}</div>
             <div class="finding-meta">
-              <span>Findings: ${escapeHtml(linkedFindings || "none")}</span>
-              <span>Causes: ${escapeHtml(linkedCauses || "none")}</span>
+              <span>${escapeHtml(runtimeConfirmationLabel(incident.runtimeConfirmationState, incident.runtimeConfirmed))}</span>
+              <span>${escapeHtml(String(incident.evidenceCount || 0))} evidence items</span>
             </div>
           </button>
         `;
@@ -1212,12 +1626,135 @@
           return;
         }
 
-        const checkpointIndex = getActiveEntries().findIndex((entry) => Array.isArray(entry.incidents) && entry.incidents.some((item) => item.id === incident.id));
-        if (checkpointIndex >= 0) {
-          selectCheckpoint(checkpointIndex, { stopReplay: true });
+        appState.selectedIncidentId = incident.id;
+        const linkedRuntimeEvent = Array.isArray(incident.linkedRuntimeEvents) ? incident.linkedRuntimeEvents[0] : undefined;
+        if (linkedRuntimeEvent) {
+          appState.selectedRuntimeEventId = linkedRuntimeEvent;
+        }
+
+        renderIncidentList(incidents, selectedEntry);
+        if (Array.isArray(selectedEntry.runtimeEvents)) {
+          renderRuntimeEvents(selectedEntry.runtimeEvents, selectedEntry);
+        }
+        renderIncidentDetail(selectedEntry, incident);
+
+        if (linkedRuntimeEvent && Array.isArray(selectedEntry.runtimeEvents)) {
+          const runtimeEvent = selectedEntry.runtimeEvents.find((event) => event.id === linkedRuntimeEvent);
+          if (runtimeEvent) {
+            renderRuntimeEventDetail(runtimeEvent);
+          }
         }
       });
     });
+
+    renderIncidentDetail(selectedEntry, getSelectedIncident(selectedEntry));
+  }
+
+  function getSelectedIncident(entry) {
+    if (!entry || !Array.isArray(entry.incidents) || entry.incidents.length === 0) {
+      return undefined;
+    }
+
+    return entry.incidents.find((incident) => incident.id === appState.selectedIncidentId) || entry.incidents[0];
+  }
+
+  function findIncidentForRuntimeEvent(entry, runtimeEventId) {
+    if (!entry || !Array.isArray(entry.incidents)) {
+      return undefined;
+    }
+
+    return entry.incidents.find((incident) => Array.isArray(incident.linkedRuntimeEvents) && incident.linkedRuntimeEvents.includes(runtimeEventId));
+  }
+
+  function renderLinkedChips(values) {
+    if (!Array.isArray(values) || values.length === 0) {
+      return '<div class="empty-state">None</div>';
+    }
+
+    return values.map((value) => `<span class="mini-pill">${escapeHtml(String(value))}</span>`).join("");
+  }
+
+  function runtimeConfirmationLabel(state, runtimeConfirmed) {
+    const normalized = String(state || "SUSPECTED").toUpperCase();
+    if (normalized === "RUNTIME_CONFIRMED" || runtimeConfirmed) {
+      return "Runtime Confirmed";
+    }
+
+    if (normalized === "MITIGATED") {
+      return "Mitigated";
+    }
+
+    if (normalized === "RESOLVED") {
+      return "Resolved";
+    }
+
+    return "Suspected";
+  }
+
+  function normalizeIncidentStatusLabel(status) {
+    const normalized = String(status || "OPEN").toUpperCase();
+    if (normalized === "MITIGATED") {
+      return "Mitigated";
+    }
+
+    if (normalized === "RESOLVED") {
+      return "Resolved";
+    }
+
+    return "Open";
+  }
+
+  function incidentStatusClass(status) {
+    const normalized = String(status || "OPEN").toUpperCase();
+    if (normalized === "MITIGATED") {
+      return "finding-warning";
+    }
+
+    if (normalized === "RESOLVED") {
+      return "finding-info";
+    }
+
+    return "finding-error";
+  }
+
+  function runtimeEventTypeClass(eventType) {
+    const normalized = String(eventType || "CONSOLE_ERROR").toUpperCase();
+    if (normalized === "NETWORK_FAILURE") {
+      return "warning";
+    }
+
+    if (normalized === "UNHANDLED_REJECTION") {
+      return "error";
+    }
+
+    if (normalized === "RUNTIME_ERROR") {
+      return "error";
+    }
+
+    return "warning";
+  }
+
+  function runtimeConfirmationClass(state, runtimeConfirmed) {
+    const normalized = runtimeConfirmationLabel(state, runtimeConfirmed);
+    if (normalized === "Runtime Confirmed") {
+      return "finding-error";
+    }
+
+    if (normalized === "Mitigated") {
+      return "finding-warning";
+    }
+
+    if (normalized === "Resolved") {
+      return "finding-info";
+    }
+
+    return "finding-warning";
+  }
+
+  function formatRuntimeLocation(event) {
+    const location = event.filePath ? event.filePath.split(/[\\/]/).pop() : "unknown file";
+    const line = event.line ? `:${event.line}` : "";
+    return `${location}${line}`;
   }
 
   function renderFileContext(relatedFiles, impactedFiles) {
@@ -1233,8 +1770,8 @@
     return items
       .map((item) => `
         <article class="context-item">
-          <strong>${escapeHtml(String(typeof item === "string" ? item : item.filePath || ""))}</strong>
-          <p>${escapeHtml(String(typeof item === "string" ? "Contextual file" : item.reason || "Contextual file"))}</p>
+          <strong>${escapeHtml(String(item.filePath || ""))}</strong>
+          <p>${escapeHtml(String(item.reason || "Contextual file"))}</p>
         </article>
       `)
       .join("");

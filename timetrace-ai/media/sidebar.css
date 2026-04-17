@@ -189,26 +189,102 @@ body.typography-elegant .code-window {
   margin-bottom: 12px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border), transparent 8%);
+  background: color-mix(in srgb, var(--panel), transparent 8%);
 }
 
 .pane-btn {
   appearance: none;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel), transparent 30%);
-  color: var(--text-muted);
-  border-radius: 8px;
-  padding: 6px;
-  font-size: 0.66rem;
-  letter-spacing: 0.04em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 30px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--text-muted), white 10%);
+  border-radius: 7px;
+  padding: 5px 5px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
   text-transform: uppercase;
   cursor: pointer;
-  transition: border-color 180ms ease, color 180ms ease;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 180ms ease, color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+
+.pane-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(120deg, transparent 18%, color-mix(in srgb, var(--accent), transparent 86%) 48%, transparent 78%);
+  opacity: 0;
+  transform: translateX(-12%);
+  transition: opacity 180ms ease, transform 220ms ease;
+  pointer-events: none;
+}
+
+.pane-icon {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border), transparent 12%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.45rem;
+  line-height: 1;
+  color: color-mix(in srgb, var(--text-muted), white 16%);
+  background: color-mix(in srgb, var(--bg), black 6%);
+}
+
+.pane-label {
+  white-space: nowrap;
+}
+
+.pane-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel-strong), transparent 18%);
+  border-color: color-mix(in srgb, var(--accent), transparent 58%);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.pane-btn:hover::after {
+  opacity: 1;
+  transform: translateX(6%);
+}
+
+.pane-btn:hover .pane-icon {
+  transform: scale(1.06);
+  border-color: color-mix(in srgb, var(--accent), transparent 44%);
+  color: var(--text);
+}
+
+.pane-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent), white 8%);
+  outline-offset: 1px;
 }
 
 .pane-btn.active {
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent), transparent 68%);
+  border-color: color-mix(in srgb, var(--accent), transparent 44%);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 88%), color-mix(in srgb, var(--panel-strong), transparent 20%));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent), transparent 72%);
+}
+
+.pane-btn.active .pane-icon {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent), transparent 40%);
+  background: color-mix(in srgb, var(--accent), transparent 72%);
+}
+
+.pane-btn.active:hover {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent), transparent 66%), 0 3px 8px rgba(0, 0, 0, 0.14);
 }
 
 .pane-hidden {
@@ -225,18 +301,15 @@ body.typography-elegant .code-window {
 
 .timeline-topline {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
+  margin-bottom: 6px;
 }
 
-.timeline-meta {
+.timeline-controls {
   display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 2px;
-  font-size: 0.64rem;
-  color: var(--text-muted);
+  align-items: center;
 }
 
 .timeline-empty {
@@ -288,7 +361,7 @@ select {
 
 .timeline-wrap {
   position: relative;
-  margin-top: 10px;
+  margin-top: 6px;
   height: 54px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--bg), black 14%);
@@ -396,6 +469,82 @@ select {
   padding: 0 16px 2px;
 }
 
+.timeline-stream {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.timeline-item {
+  appearance: none;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 10px;
+  align-items: start;
+  text-align: left;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 11px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 2%);
+  cursor: pointer;
+  box-shadow: var(--shadow);
+}
+
+.timeline-item:hover {
+  border-color: color-mix(in srgb, var(--accent), transparent 70%);
+}
+
+.timeline-item.selected {
+  border-color: color-mix(in srgb, var(--accent), transparent 44%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent), transparent 78%), var(--shadow);
+}
+
+.timeline-item-marker {
+  width: 12px;
+  height: 12px;
+  margin-top: 3px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent), transparent 78%);
+}
+
+.timeline-item-marker.normal {
+  background: var(--ok);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok), transparent 82%);
+}
+
+.timeline-item-marker.warning {
+  background: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--warn), transparent 82%);
+}
+
+.timeline-item-marker.error {
+  background: var(--danger);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger), transparent 82%);
+}
+
+.timeline-item-body .finding-topline strong {
+  font-size: 0.72rem;
+}
+
+.timeline-item-body p {
+  margin: 6px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.42;
+  color: var(--text-muted);
+}
+
+.timeline-item-body .finding-meta {
+  margin-top: 7px;
+}
+
+.timeline-item-body .mini-pill {
+  font-size: 0.58rem;
+}
+
 .stamp {
   appearance: none;
   border: 0;
@@ -414,11 +563,14 @@ select {
 }
 
 .timeline-actions {
-  margin-top: 8px;
   display: flex;
   gap: 6px;
 }
 
+.icon-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent), white 10%);
+  outline-offset: 2px;
+}
 .icon-btn {
   appearance: none;
   width: 34px;
@@ -442,6 +594,15 @@ select {
 .icon-btn span {
   font-size: 0.78rem;
   line-height: 1;
+}
+
+.timeline-btn {
+  width: 30px;
+  height: 30px;
+}
+
+.timeline-btn span {
+  font-size: 0.72rem;
 }
 
 .playback-row {
@@ -583,16 +744,73 @@ select {
   grid-template-columns: 1fr 1fr;
 }
 
+.checkpoint-kpis {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.checkpoint-pill {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 7px 8px;
+  background: color-mix(in srgb, var(--bg), black 12%);
+}
+
+.checkpoint-pill span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.57rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.checkpoint-pill strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.73rem;
+  line-height: 1.2;
+}
+
+.checkpoint-state-value.normal {
+  color: var(--ok);
+}
+
+.checkpoint-state-value.warning {
+  color: var(--warn);
+}
+
+.checkpoint-state-value.error {
+  color: var(--danger);
+}
+
 .checkpoint-summary {
-  margin: 8px 0 4px;
+  margin: 9px 0 0;
   font-size: 0.72rem;
   line-height: 1.45;
+}
+
+.checkpoint-foot {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.checkpoint-transition {
+  font-size: 0.64rem;
+  color: var(--text-muted);
 }
 
 .checkpoint-timestamp {
   margin: 0;
   color: var(--text-muted);
   font-size: 0.64rem;
+  white-space: nowrap;
 }
 
 .ranking-list,
@@ -691,6 +909,137 @@ select {
 .incident-resolved .mini-pill {
   color: var(--ok);
   border-color: color-mix(in srgb, var(--ok), transparent 70%);
+}
+
+.runtime-card .runtime-events-list,
+.runtime-events-list {
+  display: grid;
+  gap: 8px;
+}
+
+.runtime-event-item {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 2%);
+  padding: 10px 11px;
+  cursor: pointer;
+}
+
+.runtime-event-item.selected {
+  border-color: color-mix(in srgb, var(--accent), transparent 50%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent), transparent 78%);
+}
+
+.runtime-event-item p {
+  margin: 6px 0 0;
+  font-size: 0.7rem;
+  line-height: 1.42;
+}
+
+.runtime-detail,
+.incident-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.runtime-detail-header,
+.runtime-confirmation-row,
+.incident-detail-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.runtime-confirmation-row {
+  margin-top: 8px;
+  justify-content: flex-start;
+}
+
+.runtime-detail p,
+.incident-reason {
+  margin: 8px 0 0;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.runtime-detail-grid,
+.incident-meta-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.runtime-detail-grid div,
+.incident-meta-grid div {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--bg), black 12%);
+}
+
+.runtime-detail-grid span,
+.incident-meta-grid span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.runtime-detail-grid strong,
+.incident-meta-grid strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.68rem;
+  word-break: break-word;
+}
+
+.runtime-stack {
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent), transparent 86%);
+  background: color-mix(in srgb, var(--bg), black 20%);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.66rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.incident-section {
+  margin-top: 10px;
+}
+
+.linked-chip-row {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.linked-chip-row .mini-pill {
+  border-color: color-mix(in srgb, var(--accent), transparent 72%);
+  background: color-mix(in srgb, var(--panel-strong), transparent 10%);
+}
+
+.incident-item .trail-row {
+  margin-top: 8px;
+}
+
+.incident-item .finding-meta,
+.runtime-event-item .finding-meta {
+  margin-top: 8px;
 }
 
 .root-cause-item {
