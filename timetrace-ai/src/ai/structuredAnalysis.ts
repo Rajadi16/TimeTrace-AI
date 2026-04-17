@@ -6,6 +6,9 @@ import type {
 	FindingSeverity,
 	IncidentRecord,
 	IncidentStatus,
+	RuntimeConfirmationState,
+	RuntimeEventRecord,
+	RuntimeEventType,
 	ProbableRootCause,
 	StructuredFinding,
 	TimelineTrailPoint,
@@ -31,6 +34,7 @@ interface StructuredAnalysisArtifacts {
 	relatedFiles: FileContextItem[];
 	impactedFiles: FileContextItem[];
 	incidents: IncidentRecord[];
+	runtimeEvents: RuntimeEventRecord[];
 }
 
 export function buildStructuredAnalysisArtifacts(input: StructuredAnalysisInput): StructuredAnalysisArtifacts {
@@ -38,7 +42,9 @@ export function buildStructuredAnalysisArtifacts(input: StructuredAnalysisInput)
 	const probableRootCauses = buildProbableRootCauses(input, findings);
 	const relatedFiles = buildRelatedFiles(input.filePath, input.currentCode);
 	const impactedFiles = buildImpactedFiles(input.filePath, relatedFiles, input.features);
-	const incidents = buildIncidents(input, findings, probableRootCauses);
+	const checkpointId = buildCheckpointId(input.filePath, input.timestamp);
+	const runtimeEvents = buildRuntimeEvents(input, findings, probableRootCauses, checkpointId);
+	const incidents = buildIncidents(input, findings, probableRootCauses, runtimeEvents, checkpointId);
 
 	return {
 		findings,
@@ -46,6 +52,7 @@ export function buildStructuredAnalysisArtifacts(input: StructuredAnalysisInput)
 		relatedFiles,
 		impactedFiles,
 		incidents,
+		runtimeEvents,
 	};
 }
 
@@ -153,8 +160,22 @@ function buildIncidents(
 	input: Pick<StructuredAnalysisInput, 'filePath' | 'timestamp' | 'state' | 'score' | 'checkpoint' | 'previousState' | 'analysis'>,
 	findings: StructuredFinding[],
 	probableRootCauses: ProbableRootCause[],
+	runtimeEvents: RuntimeEventRecord[],
+	checkpointId: string,
 ): IncidentRecord[] {
-	const status: IncidentStatus = input.state === 'ERROR' ? 'OPEN' : input.state === 'WARNING' ? 'WATCHING' : 'RESOLVED';
+	const runtimeConfirmed = runtimeEvents.some((event) => event.runtimeConfirmed);
+	const confirmationState: RuntimeConfirmationState = runtimeEvents.length === 0
+		? 'SUSPECTED'
+		: runtimeConfirmed
+			? 'RUNTIME_CONFIRMED'
+			: input.state === 'NORMAL'
+				? 'RESOLVED'
+				: 'SUSPECTED';
+	const status: IncidentStatus = input.state === 'NORMAL' && input.previousState !== 'NORMAL'
+		? 'RESOLVED'
+		: input.state === 'WARNING'
+			? 'MITIGATED'
+			: 'OPEN';
 	const trail: TimelineTrailPoint[] = [
 		{
 			timestamp: input.timestamp,
@@ -177,12 +198,124 @@ function buildIncidents(
 			id: `incident-${input.timestamp}`,
 			summary: input.analysis,
 			status,
+			runtimeConfirmationState: confirmationState,
+			runtimeConfirmed,
+			statusReason: buildIncidentStatusReason(status, confirmationState, runtimeEvents.length),
 			timelineTrail: trail,
 			surfacedFile: input.filePath,
+			linkedCheckpointId: checkpointId,
 			linkedFindings: findings.map((finding) => finding.id),
 			probableCauses: probableRootCauses.map((cause) => cause.id),
+			linkedRuntimeEvents: runtimeEvents.map((event) => event.id),
+			lastRuntimeEventAt: runtimeEvents[0]?.timestamp,
+			evidenceCount: findings.length + runtimeEvents.length,
 		},
 	];
+}
+
+function buildRuntimeEvents(
+	input: StructuredAnalysisInput,
+	findings: StructuredFinding[],
+	probableRootCauses: ProbableRootCause[],
+	checkpointId: string,
+): RuntimeEventRecord[] {
+	if (input.state === 'NORMAL' && !input.checkpoint) {
+		return [];
+	}
+
+	const primaryLine = input.changedLineRanges[0]?.[0] ?? 1;
+	const eventType = inferRuntimeEventType(input);
+	const runtimeConfirmed = input.state === 'ERROR' || input.features.syntaxFailure || input.features.undefinedIdentifierDetected;
+	const confirmationState: RuntimeConfirmationState = runtimeConfirmed
+		? 'RUNTIME_CONFIRMED'
+		: input.state === 'WARNING'
+			? 'SUSPECTED'
+			: input.checkpoint
+				? 'MITIGATED'
+				: 'SUSPECTED';
+	const message = buildRuntimeEventMessage(input, eventType);
+	const stackPreview = buildStackPreview(input, eventType, primaryLine);
+	const runtimeEventId = `runtime-${input.timestamp}`;
+
+	return [
+		{
+			id: runtimeEventId,
+			eventType,
+			message,
+			timestamp: input.timestamp,
+			severity: eventType === 'RUNTIME_ERROR' ? 'ERROR' : 'WARNING',
+			filePath: input.filePath,
+			line: primaryLine,
+			stackPreview,
+			linkedCheckpointId: checkpointId,
+			linkedIncidentId: `incident-${input.timestamp}`,
+			runtimeConfirmed,
+			confirmationState,
+			evidenceCount: Math.max(1, findings.length + probableRootCauses.length),
+		},
+	];
+}
+
+function inferRuntimeEventType(input: StructuredAnalysisInput): RuntimeEventType {
+	if (input.features.syntaxFailure) {
+		return 'RUNTIME_ERROR';
+	}
+
+	if (input.features.undefinedIdentifierDetected) {
+		return 'UNHANDLED_REJECTION';
+	}
+
+	if (input.features.nullCheckRemoved || input.features.tryCatchRemoved) {
+		return 'NETWORK_FAILURE';
+	}
+
+	return input.state === 'ERROR' ? 'CONSOLE_ERROR' : 'CONSOLE_ERROR';
+}
+
+function buildRuntimeEventMessage(input: StructuredAnalysisInput, eventType: RuntimeEventType): string {
+	if (eventType === 'RUNTIME_ERROR') {
+		return 'Runtime error surfaced after the latest save.';
+	}
+
+	if (eventType === 'UNHANDLED_REJECTION') {
+		return 'Unhandled promise rejection observed in the execution path.';
+	}
+
+	if (eventType === 'NETWORK_FAILURE') {
+		return 'Network/API failure surfaced during request execution.';
+	}
+
+	return input.state === 'ERROR'
+		? 'Console error surfaced in the runtime stream.'
+		: 'Console warning surfaced before the incident escalated.';
+}
+
+function buildStackPreview(input: StructuredAnalysisInput, eventType: RuntimeEventType, line: number): string[] {
+	const baseFile = path.posix.basename(input.filePath);
+	const stackHeader = eventType === 'NETWORK_FAILURE'
+		? 'at fetchData (network client)'
+		: `at ${baseFile}:${line}`;
+	return [
+		`${eventType}: ${input.analysis}`,
+		stackHeader,
+		`at checkpoint ${buildCheckpointId(input.filePath, input.timestamp)}`,
+	];
+}
+
+function buildIncidentStatusReason(status: IncidentStatus, confirmationState: RuntimeConfirmationState, eventCount: number): string {
+	if (status === 'RESOLVED') {
+		return eventCount > 0 ? 'Runtime evidence no longer indicates an active failure.' : 'Incident resolved after the latest checkpoint.';
+	}
+
+	if (status === 'MITIGATED') {
+		return confirmationState === 'RUNTIME_CONFIRMED'
+			? 'Runtime evidence confirmed the issue, but the current checkpoint reduced impact.'
+			: 'Issue is still active, but the most recent state reduced severity.';
+	}
+
+	return confirmationState === 'RUNTIME_CONFIRMED'
+		? 'Runtime evidence confirmed an active issue.'
+		: 'Static analysis indicates a probable active issue.';
 }
 
 function inferFindingSeverity(reason: string, features: FeatureSet): FindingSeverity {
@@ -212,6 +345,10 @@ function resolveRelativeSpecifier(filePath: string, specifier: string): string {
 	const baseDir = path.posix.dirname(filePath);
 	const resolved = path.posix.normalize(path.posix.join(baseDir, specifier));
 	return resolved.replace(/\\/g, '/');
+}
+
+function buildCheckpointId(filePath: string, timestamp: string): string {
+	return `${filePath}::${timestamp}`.replace(/[^A-Za-z0-9_-]/g, '-');
 }
 
 function roundConfidence(value: number): number {

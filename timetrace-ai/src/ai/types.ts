@@ -1,6 +1,8 @@
 export type AnalysisState = 'NORMAL' | 'WARNING' | 'ERROR';
 export type FindingSeverity = 'INFO' | 'WARNING' | 'ERROR';
-export type IncidentStatus = 'OPEN' | 'WATCHING' | 'RESOLVED';
+export type IncidentStatus = 'OPEN' | 'MITIGATED' | 'RESOLVED';
+export type RuntimeEventType = 'RUNTIME_ERROR' | 'UNHANDLED_REJECTION' | 'CONSOLE_ERROR' | 'NETWORK_FAILURE';
+export type RuntimeConfirmationState = 'SUSPECTED' | 'RUNTIME_CONFIRMED' | 'MITIGATED' | 'RESOLVED';
 
 export interface StructuredFinding {
 	id: string;
@@ -32,14 +34,37 @@ export interface TimelineTrailPoint {
 	label: string;
 }
 
+export interface RuntimeEventRecord {
+	id: string;
+	eventType: RuntimeEventType;
+	message: string;
+	timestamp: string;
+	severity: FindingSeverity;
+	filePath?: string;
+	line?: number;
+	stackPreview: string[];
+	linkedCheckpointId?: string;
+	linkedIncidentId?: string;
+	runtimeConfirmed: boolean;
+	confirmationState: RuntimeConfirmationState;
+	evidenceCount: number;
+}
+
 export interface IncidentRecord {
 	id: string;
 	summary: string;
 	status: IncidentStatus;
+	runtimeConfirmationState: RuntimeConfirmationState;
+	runtimeConfirmed: boolean;
+	statusReason: string;
 	timelineTrail: TimelineTrailPoint[];
 	surfacedFile: string;
+	linkedCheckpointId: string;
 	linkedFindings: string[];
 	probableCauses: string[];
+	linkedRuntimeEvents: string[];
+	lastRuntimeEventAt?: string;
+	evidenceCount: number;
 }
 
 export interface AnalyzeChangeInput {
@@ -82,6 +107,7 @@ export interface StructuredAnalysisOutput {
 	relatedFiles: FileContextItem[];
 	impactedFiles: FileContextItem[];
 	incidents: IncidentRecord[];
+	runtimeEvents: RuntimeEventRecord[];
 }
 
 export interface AnalyzeChangeOutput extends StructuredAnalysisOutput {

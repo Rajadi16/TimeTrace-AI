@@ -5,6 +5,7 @@ import type {
 	FeatureSet,
 	FileContextItem,
 	IncidentRecord,
+	RuntimeEventRecord,
 	ProbableRootCause,
 	StructuredFinding,
 } from './types';
@@ -47,6 +48,7 @@ export interface TimeTraceAnalysisResult {
 	relatedFiles: FileContextItem[];
 	impactedFiles: FileContextItem[];
 	incidents: IncidentRecord[];
+	runtimeEvents: RuntimeEventRecord[];
 }
 
 export function runTimeTraceAnalysis(input: TimeTraceAnalysisInput): TimeTraceAnalysisResult {

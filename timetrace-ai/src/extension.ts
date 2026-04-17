@@ -37,6 +37,7 @@ function buildTimelineCheckpointRecord(
 	return {
 		filePath,
 		timestamp,
+		checkpointId: `${filePath}::${timestamp}`.replace(/[^A-Za-z0-9_-]/g, '-'),
 		state: result.state,
 		score: result.score,
 		checkpoint: result.checkpoint,
@@ -48,9 +49,10 @@ function buildTimelineCheckpointRecord(
 		codePreview,
 		findings: result.findings,
 		probableRootCauses: result.probableRootCauses,
-	relatedFiles: result.relatedFiles,
+		relatedFiles: result.relatedFiles,
 		impactedFiles: result.impactedFiles,
 		incidents: result.incidents,
+		runtimeEvents: result.runtimeEvents,
 	};
 }
 
@@ -290,17 +292,32 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		</header>
 
 		<nav class="pane-switch reveal" aria-label="Sidebar sections">
-			<button class="pane-btn active" data-pane-target="overview" type="button">Overview</button>
-			<button class="pane-btn" data-pane-target="code" type="button">Code</button>
-			<button class="pane-btn" data-pane-target="insights" type="button">Insights</button>
+			<button class="pane-btn active" data-pane-target="overview" type="button">
+				<span class="pane-icon" aria-hidden="true">O</span>
+				<span class="pane-label">Overview</span>
+			</button>
+			<button class="pane-btn" data-pane-target="code" type="button">
+				<span class="pane-icon" aria-hidden="true">{}</span>
+				<span class="pane-label">Code</span>
+			</button>
+			<button class="pane-btn" data-pane-target="insights" type="button">
+				<span class="pane-icon" aria-hidden="true">i</span>
+				<span class="pane-label">Insights</span>
+			</button>
 		</nav>
 
 		<section class="section hero reveal" id="timeline-section" data-pane="overview">
 			<div class="timeline-topline">
-				<div class="section-label">Incident Timeline</div>
-				<div class="timeline-meta">
-					<span id="timeline-source">Demo mode</span>
-					<span id="timeline-count"></span>
+				<div class="section-label">Replay Timeline</div>
+				<div class="timeline-controls" aria-label="Replay controls">
+					<div class="timeline-actions">
+						<button class="icon-btn timeline-btn" id="timeline-rewind" type="button" aria-label="Rewind timeline" title="Rewind">
+							<span>&#8630;</span>
+						</button>
+						<button class="icon-btn timeline-btn" id="timeline-play-pause" type="button" aria-label="Play timeline" title="Play / Pause">
+							<span id="timeline-play-pause-icon">&#9654;</span>
+						</button>
+					</div>
 				</div>
 			</div>
 			<div class="scenario-row" id="scenario-row">
@@ -317,35 +334,26 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 				</div>
 			</div>
 			<div class="timeline-stamps" id="timeline-stamps" aria-label="Checkpoint timestamps"></div>
-
-			<div class="timeline-actions">
-				<button class="icon-btn" id="timeline-play-pause" type="button" aria-label="Play timeline" title="Play / Pause">
-					<span id="timeline-play-pause-icon">&#9654;</span>
-				</button>
-				<button class="icon-btn" id="timeline-rewind" type="button" aria-label="Rewind timeline" title="Rewind">
-					<span>&#8630;</span>
-				</button>
-			</div>
-			<div class="playback-row">
-				<label for="replay-speed">Replay Speed</label>
-				<select id="replay-speed" aria-label="Replay speed selector">
-					<option value="slow">Cinematic</option>
-					<option value="normal" selected>Balanced</option>
-					<option value="fast">Rapid</option>
-				</select>
-			</div>
+			<div class="timeline-stream" id="timeline-stream" aria-label="Unified checkpoint and runtime timeline"></div>
 		</section>
 
 		<section class="card glass reveal" id="error-card" data-pane="overview">
 			<div class="card-title">Checkpoint Detail</div>
-			<div class="metrics checkpoint-metrics">
-				<div><span>State</span><strong id="checkpoint-state"></strong></div>
-				<div><span>Score</span><strong id="checkpoint-score"></strong></div>
-				<div><span>Transition</span><strong id="checkpoint-transition"></strong></div>
-				<div><span>Checkpoint</span><strong id="checkpoint-marker"></strong></div>
+			<div class="checkpoint-kpis">
+				<div class="checkpoint-pill">
+					<span>State</span>
+					<strong id="checkpoint-state" class="checkpoint-state-value"></strong>
+				</div>
+				<div class="checkpoint-pill">
+					<span>Score</span>
+					<strong id="checkpoint-score"></strong>
+				</div>
 			</div>
 			<p class="checkpoint-summary" id="checkpoint-summary"></p>
-			<p class="checkpoint-timestamp" id="checkpoint-timestamp"></p>
+			<div class="checkpoint-foot">
+				<span class="checkpoint-transition" id="checkpoint-transition"></span>
+				<span class="checkpoint-timestamp" id="checkpoint-timestamp"></span>
+			</div>
 		</section>
 
 		<section class="card telemetry-card reveal" id="latency-card" data-pane="insights">
@@ -359,6 +367,26 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="sparkline-meta">
 				<span>Current</span>
 				<strong id="latency-value"></strong>
+			</div>
+		</section>
+
+		<section class="card runtime-card reveal" id="runtime-events-card" data-pane="insights">
+			<div class="card-title">Runtime Events</div>
+			<div class="runtime-events-list" id="runtime-events-list"></div>
+			<div class="runtime-detail" id="runtime-detail">
+				<div class="mini-title">Event Detail</div>
+				<div class="runtime-detail-header">
+					<span class="mini-pill" id="runtime-detail-type">No event selected</span>
+					<span class="mini-pill" id="runtime-detail-status">Waiting</span>
+				</div>
+				<p id="runtime-detail-message">Select a runtime event to inspect stack details and links.</p>
+				<div class="runtime-detail-grid">
+					<div><span>Timestamp</span><strong id="runtime-detail-time">-</strong></div>
+					<div><span>File</span><strong id="runtime-detail-file">-</strong></div>
+					<div><span>Line</span><strong id="runtime-detail-line">-</strong></div>
+					<div><span>Linked checkpoint</span><strong id="runtime-detail-checkpoint">-</strong></div>
+				</div>
+				<pre class="runtime-stack" id="runtime-detail-stack">No runtime stack captured yet.</pre>
 			</div>
 		</section>
 
@@ -384,8 +412,40 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		</section>
 
 		<section class="card analysis-card reveal" id="analysis-card" data-pane="insights">
-			<div class="card-title">Incidents and Cross-File Context</div>
+			<div class="card-title">Incident Detail</div>
 			<div class="incident-list" id="incident-list"></div>
+			<div class="incident-detail" id="incident-detail">
+				<div class="incident-detail-header">
+					<div>
+						<div class="mini-title">Selected Incident</div>
+						<strong id="incident-detail-summary">No incident selected</strong>
+					</div>
+					<span class="mini-pill" id="incident-detail-status">Waiting</span>
+				</div>
+				<div class="runtime-confirmation-row">
+					<span class="mini-pill" id="incident-detail-runtime-confirmation">Suspected</span>
+					<span class="mini-pill" id="incident-detail-severity">State</span>
+				</div>
+				<div class="incident-meta-grid">
+					<div><span>Surfaced file</span><strong id="incident-detail-file">-</strong></div>
+					<div><span>Checkpoint</span><strong id="incident-detail-checkpoint">-</strong></div>
+					<div><span>Runtime evidence</span><strong id="incident-detail-runtime-count">0</strong></div>
+					<div><span>Last runtime event</span><strong id="incident-detail-last-runtime">-</strong></div>
+				</div>
+				<p class="incident-reason" id="incident-detail-reason">Waiting for incident selection.</p>
+				<div class="incident-section">
+					<div class="mini-title">Linked Findings</div>
+					<div class="linked-chip-row" id="incident-detail-findings"></div>
+				</div>
+				<div class="incident-section">
+					<div class="mini-title">Root-Cause Candidates</div>
+					<div class="linked-chip-row" id="incident-detail-causes"></div>
+				</div>
+				<div class="incident-section">
+					<div class="mini-title">Runtime Evidence</div>
+					<div class="linked-chip-row" id="incident-detail-runtime-events"></div>
+				</div>
+			</div>
 			<div class="file-context-grid">
 				<div>
 					<div class="mini-title">Related Files</div>
@@ -402,24 +462,6 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			</div>
 		</section>
 
-		<section class="card control-card reveal">
-			<div class="card-title">Controls</div>
-			<div class="control-grid">
-				<button class="btn" id="jump-root" type="button">Jump to Root Cause</button>
-				<button class="btn btn-secondary" id="replay" type="button">Replay</button>
-				<button class="btn btn-tertiary" id="previous" type="button">Previous</button>
-				<button class="btn btn-tertiary" id="next" type="button">Next</button>
-			</div>
-			<div class="footer-row">
-				<span>Theme</span>
-				<button class="theme-toggle" id="theme-toggle" type="button">Auto</button>
-			</div>
-			<div class="footer-row">
-				<span>Typography</span>
-				<button class="theme-toggle" id="font-toggle" type="button">Mono</button>
-			</div>
-			<p class="hint">Shortcuts: ← / → navigate timeline, Space replay</p>
-		</section>
 	</main>
 
 	<script nonce="${nonce}">

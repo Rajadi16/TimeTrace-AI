@@ -28,6 +28,7 @@ export interface TimelineCheckpointRecord {
 	state: AnalysisState;
 	score: number;
 	checkpoint: boolean;
+	checkpointId?: string;
 	previousState: AnalysisState;
 	reasons: string[];
 	analysis: string;
@@ -39,6 +40,7 @@ export interface TimelineCheckpointRecord {
 	relatedFiles?: TimeTraceAnalysisResult['relatedFiles'];
 	impactedFiles?: TimeTraceAnalysisResult['impactedFiles'];
 	incidents?: TimeTraceAnalysisResult['incidents'];
+	runtimeEvents?: TimeTraceAnalysisResult['runtimeEvents'];
 }
 
 export class SnapshotStore {
