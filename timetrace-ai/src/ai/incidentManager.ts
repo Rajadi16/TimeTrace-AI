@@ -23,6 +23,7 @@ export function updateIncidents(
 	impactedFiles: string[],
 	relatedFiles: string[],
 	timestamp: string,
+	runtimeEvents: Array<{ id: string; filePath?: string; timestamp: string; severity: 'warning' | 'error' }> = [],
 ): Incident[] {
 	// Index current findings by id
 	const currentFindingIds = new Set(currentFindings.map((f) => f.id));
@@ -114,6 +115,44 @@ export function updateIncidents(
 			impactedFiles,
 			relatedFiles,
 		});
+	}
+
+	// Link runtime evidence to active incidents using simple file-based matching.
+	if (runtimeEvents.length > 0) {
+		for (let i = 0; i < updatedIncidents.length; i += 1) {
+			const incident = updatedIncidents[i];
+			if (incident.status === 'resolved') {
+				continue;
+			}
+
+			const linked = runtimeEvents.filter((event) => {
+				if (!event.filePath) {
+					return false;
+				}
+
+				const fileName = event.filePath.split(/[\\/]/).pop() ?? event.filePath;
+				return incident.id.includes(event.filePath)
+					|| incident.title.includes(fileName)
+					|| incident.impactedFiles.includes(event.filePath)
+					|| incident.relatedFiles.includes(event.filePath);
+			});
+
+			if (linked.length === 0) {
+				continue;
+			}
+
+			const latestRuntimeTs = linked
+				.map((event) => new Date(event.timestamp).getTime())
+				.sort((a, b) => b - a)[0];
+
+			updatedIncidents[i] = {
+				...incident,
+				runtimeEventIds: [...new Set([...(incident.runtimeEventIds ?? []), ...linked.map((event) => event.id)])],
+				runtimeConfirmed: linked.some((event) => event.severity === 'error') || incident.runtimeConfirmed,
+				lastRuntimeEventAt: latestRuntimeTs ? new Date(latestRuntimeTs).toISOString() : incident.lastRuntimeEventAt,
+				runtimeEvidenceCount: (incident.runtimeEvidenceCount ?? 0) + linked.length,
+			};
+		}
 	}
 
 	return updatedIncidents;

@@ -116,6 +116,12 @@ interface RootCauseInput {
 	downstreamFiles: string[];
 	saveTimestamp: number;
 	recentSaves: Record<string, number>;
+	runtimeEvents?: Array<{
+		filePath?: string;
+		severity: 'warning' | 'error';
+		message: string;
+		functionName?: string;
+	}>;
 }
 
 interface ScoredCandidate {
@@ -170,6 +176,18 @@ export function rankRootCauses(inputs: RootCauseInput[]): RootCauseCandidate[] {
 			if (downstreamWithFindings.length > 0) {
 				signals.push(`${input.downstreamFiles.length} downstream file(s) also have findings`);
 				rawScore += 3;
+			}
+		}
+
+		// Signal 6: runtime evidence points to the same file
+		const runtimeMatches = (input.runtimeEvents ?? []).filter((event) => event.filePath === input.filePath);
+		if (runtimeMatches.length > 0) {
+			signals.push(`[runtime] ${runtimeMatches.length} runtime signal(s) point to this file`);
+			rawScore += 3 * runtimeMatches.length;
+
+			if (runtimeMatches.some((event) => event.severity === 'error')) {
+				signals.push('[runtime] includes error-severity runtime evidence');
+				rawScore += 2;
 			}
 		}
 

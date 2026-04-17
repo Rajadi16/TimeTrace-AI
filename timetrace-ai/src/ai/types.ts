@@ -53,6 +53,29 @@ export interface Incident {
 	impactedFiles: string[];
 	/** Files contextually tied to this analysis/incident */
 	relatedFiles: string[];
+	/** Runtime event ids linked to this incident */
+	runtimeEventIds?: string[];
+	/** True if runtime evidence confirms this incident */
+	runtimeConfirmed?: boolean;
+	/** ISO timestamp of the latest linked runtime event */
+	lastRuntimeEventAt?: string;
+	/** Count of linked runtime signals */
+	runtimeEvidenceCount?: number;
+}
+
+export interface RuntimeEvent {
+	id: string;
+	type: string;
+	message: string;
+	timestamp: string;
+	severity: 'warning' | 'error';
+	filePath?: string;
+	line?: number;
+	functionName?: string;
+	relatedCheckpointId?: string;
+	relatedIncidentId?: string;
+	relatedFindingIds?: string[];
+	evidence?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -129,4 +152,5 @@ export interface AnalyzeChangeOutput {
 	incidents: Incident[];
 	impactedFiles: string[];
 	relatedFiles: string[];
+	runtimeEvents: RuntimeEvent[];
 }

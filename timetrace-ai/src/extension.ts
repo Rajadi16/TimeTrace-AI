@@ -276,7 +276,21 @@ export function activate(context: vscode.ExtensionContext) {
 		void vscode.window.showInformationMessage(`Latest TimeTrace AI result for ${editor.document.fileName} is available in the output channel.`);
 	});
 
-	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand);
+	const injectTestRuntimeEventCommand = vscode.commands.registerCommand('timetrace-ai.injectTestRuntimeEvent', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			void vscode.window.showWarningMessage('Open a file first to inject a test runtime signal.');
+			return;
+		}
+
+		outputChannel.show(true);
+		outputChannel.appendLine('[runtime-test] Injected simulated runtime signal for current file.');
+		void vscode.window.showInformationMessage('Injected test runtime signal. Re-analyzing current file...');
+
+		await analyzeDocument(editor.document);
+	});
+
+	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand, injectTestRuntimeEventCommand);
 	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
 	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
 	console.log('TimeTrace AI extension activated.');

@@ -6,7 +6,7 @@ import { detectFindings } from './findingDetector';
 import { extractFeatures } from './featureExtractor';
 import { updateIncidents } from './incidentManager';
 import { rankRootCauses } from './classifier';
-import type { AnalyzeChangeInput, AnalyzeChangeOutput, AnalysisState, Finding, Incident } from './types';
+import type { AnalyzeChangeInput, AnalyzeChangeOutput, AnalysisState, Finding, Incident, RuntimeEvent } from './types';
 
 function normalizeState(previousState?: AnalysisState): AnalysisState {
 	return previousState ?? 'NORMAL';
@@ -25,6 +25,8 @@ export interface AnalyzeChangeContext {
 	recentSaves: Record<string, number>;
 	/** Absolute workspace root path (for import resolution) */
 	workspaceRoot: string;
+	/** Optional runtime events associated with current analysis context */
+	runtimeEvents?: RuntimeEvent[];
 }
 
 export function analyzeChange(
@@ -75,6 +77,7 @@ export function analyzeChange(
 	// -------------------------------------------------------------------------
 	const saveTs = new Date(input.timestamp).getTime();
 	const recentSaves = context?.recentSaves ?? {};
+	const runtimeEvents = context?.runtimeEvents ?? [];
 
 	const probableRootCauses = rankRootCauses([
 		{
@@ -84,6 +87,7 @@ export function analyzeChange(
 			downstreamFiles: computeDirectDownstream(graph, input.filePath),
 			saveTimestamp: saveTs,
 			recentSaves,
+			runtimeEvents,
 		},
 	]);
 
@@ -96,6 +100,7 @@ export function analyzeChange(
 		impactedFiles,
 		relatedFiles,
 		input.timestamp,
+		runtimeEvents,
 	);
 
 	// -------------------------------------------------------------------------
@@ -126,5 +131,6 @@ export function analyzeChange(
 		incidents,
 		impactedFiles,
 		relatedFiles,
+		runtimeEvents,
 	};
 }

@@ -265,6 +265,44 @@
     }
 
     const payload = message.payload || message;
+
+    // Keep full history intact when analysisResult arrives without a history array.
+    // Otherwise, the timeline can collapse to a single "current" checkpoint.
+    const hasHistoryArray =
+      Array.isArray(payload.timelineHistory) ||
+      Array.isArray(payload.history) ||
+      Array.isArray(payload.entries);
+
+    if (message.type === "analysisResult" && !hasHistoryArray && appState.liveEntries.length > 0) {
+      const latestIndex = appState.liveEntries.length - 1;
+      const latestEntry = appState.liveEntries[latestIndex];
+
+      appState.mode = "live";
+      appState.liveEntries[latestIndex] = {
+        ...latestEntry,
+        state: payload.state || latestEntry.state,
+        score: Number.isFinite(Number(payload.score)) ? Number(payload.score) : latestEntry.score,
+        previousState: payload.previousState || latestEntry.previousState,
+        reasons: Array.isArray(payload.reasons) ? payload.reasons : latestEntry.reasons,
+        analysis: payload.analysis || latestEntry.analysis,
+        changedLineRanges: Array.isArray(payload.changedLineRanges) ? payload.changedLineRanges : latestEntry.changedLineRanges,
+        findings: Array.isArray(payload.findings) ? payload.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, latestEntry.changedLineRanges || [], latestEntry.reasons || [])) : latestEntry.findings,
+        probableRootCauses: Array.isArray(payload.probableRootCauses) ? payload.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, latestEntry.filePath, latestEntry.findings || [])) : latestEntry.probableRootCauses,
+        incidents: Array.isArray(payload.incidents) ? payload.incidents.map((item, incidentIndex) => normalizeIncident(item, incidentIndex, latestEntry.filePath, latestEntry.findings || [], latestEntry.probableRootCauses || [], latestEntry.runtimeEvents || [], latestEntry.score, latestEntry.previousState, latestEntry.state, latestEntry.timestamp, latestEntry.checkpoint, latestEntry.checkpointId)) : latestEntry.incidents,
+        runtimeEvents: Array.isArray(payload.runtimeEvents) ? payload.runtimeEvents.map((item, eventIndex) => normalizeRuntimeEvent(item, eventIndex, latestEntry.filePath || "", latestEntry.checkpointId, latestEntry.timestamp, latestEntry.state, latestEntry.checkpoint, latestEntry.findings || [], latestEntry.probableRootCauses || [])) : latestEntry.runtimeEvents,
+        relatedFiles: Array.isArray(payload.relatedFiles) ? payload.relatedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.relatedFiles,
+        impactedFiles: Array.isArray(payload.impactedFiles) ? payload.impactedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.impactedFiles
+      };
+
+      appState.selectedIndex = latestIndex;
+      appState.codeState = "after";
+      appState.sourceLabel = buildSourceLabel(payload.filePath || latestEntry.filePath, appState.liveEntries.length);
+      appState.replayTimer = clearTimer(appState.replayTimer);
+      elements.scenarioRow.classList.add("hidden");
+      updateView({ animateText: true });
+      return;
+    }
+
     const entries = normalizeHistoryEntries(payload);
 
     if (!entries.length) {
