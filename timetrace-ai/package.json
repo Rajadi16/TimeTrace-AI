@@ -9,13 +9,25 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:timetrace-ai.analyzeCurrentDocument",
+    "onCommand:timetrace-ai.showLatestAnalysis"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "timetrace-ai.helloWorld",
         "title": "Hello World"
+      },
+      {
+        "command": "timetrace-ai.analyzeCurrentDocument",
+        "title": "TimeTrace AI: Analyze Current Document"
+      },
+      {
+        "command": "timetrace-ai.showLatestAnalysis",
+        "title": "TimeTrace AI: Show Latest Analysis"
       }
     ]
   },
