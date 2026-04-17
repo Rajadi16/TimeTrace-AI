@@ -219,11 +219,18 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		</header>
 
 		<section class="section hero reveal" id="timeline-section">
-			<div class="section-label">Incident Timeline</div>
-			<div class="scenario-row">
+			<div class="timeline-topline">
+				<div class="section-label">Incident Timeline</div>
+				<div class="timeline-meta">
+					<span id="timeline-source">Demo mode</span>
+					<span id="timeline-count"></span>
+				</div>
+			</div>
+			<div class="scenario-row" id="scenario-row">
 				<label for="scenario-select">Scenario</label>
 				<select id="scenario-select" aria-label="Select debugging scenario"></select>
 			</div>
+			<div class="timeline-empty hidden" id="timeline-empty">Waiting for checkpoint history.</div>
 
 			<div class="timeline-wrap" id="timeline-wrap">
 				<div class="timeline-track" id="timeline-track"></div>
@@ -259,9 +266,9 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		</section>
 
 		<section class="card telemetry-card reveal" id="latency-card">
-			<div class="card-title">Latency Trace</div>
+			<div class="card-title">Checkpoint Signal</div>
 			<div class="sparkline-wrap">
-				<svg class="sparkline" id="sparkline" viewBox="0 0 180 54" preserveAspectRatio="none" aria-label="Latency sparkline">
+				<svg class="sparkline" id="sparkline" viewBox="0 0 180 54" preserveAspectRatio="none" aria-label="Checkpoint signal sparkline">
 					<path id="sparkline-path" class="sparkline-path"></path>
 					<circle id="sparkline-dot" class="sparkline-dot" r="3"></circle>
 				</svg>
@@ -273,13 +280,18 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 		</section>
 
 		<section class="card root-cause reveal hidden" id="root-cause-card">
-			<div class="card-title">Root Cause</div>
+			<div class="card-title">Checkpoint Details</div>
+			<div class="checkpoint-strip">
+				<span class="state-badge" id="state-badge"></span>
+				<span class="checkpoint-timestamp" id="checkpoint-timestamp"></span>
+			</div>
 			<p id="root-cause-text"></p>
 		</section>
 
 		<section class="card code-card reveal" id="code-card">
 			<div class="card-title">Relevant Code Segment</div>
 			<p class="card-subtitle">Only impacted lines are shown</p>
+			<div class="code-impact" id="changed-lines"></div>
 			<div class="code-toggle" role="tablist" aria-label="Before and after code states">
 				<button class="toggle-btn active" id="before-tab" data-state="before" type="button">Before</button>
 				<button class="toggle-btn" id="after-tab" data-state="after" type="button">After</button>

@@ -9,12 +9,6 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [
-    "onStartupFinished",
-    "onCommand:timetrace-ai.openSidebar",
-    "onCommand:timetrace-ai.analyzeCurrentDocument",
-    "onCommand:timetrace-ai.showLatestAnalysis"
-  ],
   "main": "./out/extension.js",
   "contributes": {
     "viewsContainers": {

@@ -1,12 +1,9 @@
 (() => {
   const vscode = window.__timetraceApi;
 
-  const scenarios = [
+  const demoScenarios = [
     {
       name: "API Timeout",
-      nodes: ["normal", "warning", "error"],
-      error: { type: "TimeoutException", line: "142", time: "14:32:45" },
-      latencyTrace: [86, 90, 92, 98, 108, 142, 186, 254, 298],
       rootCause: "Missing timeout and cancellation path in network fetch caused blocking requests.",
       code: {
         before: [
@@ -21,10 +18,9 @@
           "  const t = setTimeout(() => c.abort(), 5000);",
           "  const response = await fetch(url, { signal: c.signal });"
         ],
-        problemLine: 2
+        focusLine: 2
       },
-      impactFlow: ["API", "DB", "Cache"],
-      failingNode: "API",
+      changedLineRanges: [[2, 4]],
       analysis: {
         summary: "Requests exceeded max response threshold during peak load.",
         rootCause: "No timeout or retry strategy on downstream network operations.",
@@ -33,9 +29,6 @@
     },
     {
       name: "Connection Drift",
-      nodes: ["normal", "warning", "error"],
-      error: { type: "DBConnectionError", line: "88", time: "09:11:09" },
-      latencyTrace: [68, 70, 74, 88, 107, 129, 171, 205, 236],
       rootCause: "Connection pool leak left stale sockets unreleased under retry loops.",
       code: {
         before: [
@@ -50,10 +43,9 @@
           "  try { await conn.query(job.sql); }",
           "  finally { conn.release(); }"
         ],
-        problemLine: 3
+        focusLine: 3
       },
-      impactFlow: ["API", "DB", "Cache"],
-      failingNode: "DB",
+      changedLineRanges: [[2, 4]],
       analysis: {
         summary: "Write latency climbed as available DB connections dropped.",
         rootCause: "Missing release logic in exception paths exhausted pool capacity.",
@@ -62,9 +54,6 @@
     },
     {
       name: "Cache Poison",
-      nodes: ["normal", "warning", "error"],
-      error: { type: "SerializationFault", line: "57", time: "21:07:12" },
-      latencyTrace: [52, 55, 62, 71, 93, 116, 149, 212, 248],
       rootCause: "Invalid payload shape was cached without schema validation.",
       code: {
         before: [
@@ -79,10 +68,9 @@
           "cache.set(key, payload.value);",
           "return payload.value;"
         ],
-        problemLine: 2
+        focusLine: 2
       },
-      impactFlow: ["API", "DB", "Cache"],
-      failingNode: "Cache",
+      changedLineRanges: [[1, 4]],
       analysis: {
         summary: "Corrupted serialized data propagated to UI rendering path.",
         rootCause: "No schema guard before cache write allowed malformed objects.",
@@ -91,17 +79,30 @@
     }
   ];
 
+  const replayDurations = {
+    slow: 960,
+    normal: 680,
+    fast: 380
+  };
+
   const elements = {
+    scenarioRow: document.getElementById("scenario-row"),
     scenarioSelect: document.getElementById("scenario-select"),
+    timelineSource: document.getElementById("timeline-source"),
+    timelineCount: document.getElementById("timeline-count"),
+    timelineEmpty: document.getElementById("timeline-empty"),
     timelineNodes: document.getElementById("timeline-nodes"),
     timelineProgress: document.getElementById("timeline-progress"),
     scrubber: document.getElementById("scrubber"),
     errorType: document.getElementById("error-type"),
     errorLine: document.getElementById("error-line"),
     errorTime: document.getElementById("error-time"),
+    stateBadge: document.getElementById("state-badge"),
+    checkpointTimestamp: document.getElementById("checkpoint-timestamp"),
     rootCard: document.getElementById("root-cause-card"),
     rootText: document.getElementById("root-cause-text"),
     codeWindow: document.getElementById("code-window"),
+    changedLines: document.getElementById("changed-lines"),
     beforeTab: document.getElementById("before-tab"),
     afterTab: document.getElementById("after-tab"),
     flow: document.getElementById("impact-flow"),
@@ -124,34 +125,30 @@
     hero: document.getElementById("timeline-section")
   };
 
-  const state = {
-    scenarioIndex: 0,
-    stage: 0,
+  const appState = {
+    mode: "demo",
+    demoScenarioIndex: 0,
+    demoEntries: [],
+    liveEntries: [],
+    selectedIndex: 0,
     codeState: "before",
     replayTimer: undefined,
     theme: "auto",
     replaySpeed: "normal",
-    typography: "mono"
-  };
-
-  const liveDefaults = {
-    latencyTrace: [64, 72, 80, 93, 108, 126, 144, 169, 188],
-    impactFlow: ["Editor", "Analyzer", "Timeline"]
-  };
-
-  const replayDurations = {
-    slow: 960,
-    normal: 680,
-    fast: 380
+    typography: "mono",
+    sourceLabel: "Demo mode"
   };
 
   function init() {
-    scenarios.forEach((scenario, i) => {
+    demoScenarios.forEach((scenario, index) => {
       const option = document.createElement("option");
-      option.value = String(i);
+      option.value = String(index);
       option.textContent = scenario.name;
       elements.scenarioSelect.appendChild(option);
     });
+
+    appState.demoEntries = buildDemoTimeline(demoScenarios[0]);
+    appState.selectedIndex = appState.demoEntries.length - 1;
 
     window.addEventListener("message", (event) => {
       handleExtensionMessage(event.data);
@@ -159,106 +156,55 @@
 
     attachListeners();
     setupRevealAnimations();
-    updateUI(true);
-  }
-
-  function handleExtensionMessage(message) {
-    if (!message || message.type !== "analysisResult" || !message.payload) {
-      return;
-    }
-
-    const payload = message.payload;
-    const stageByState = {
-      NORMAL: 0,
-      WARNING: 1,
-      ERROR: 2
-    };
-
-    const activeScenario = scenarios[0];
-    const reasonText = payload.reasons && payload.reasons.length
-      ? payload.reasons.join("; ")
-      : "No major risk signals detected.";
-    const firstRange = payload.changedLineRanges && payload.changedLineRanges.length
-      ? payload.changedLineRanges[0]
-      : undefined;
-    const changedLineText = firstRange ? `${firstRange[0]}-${firstRange[1]}` : "-";
-    const filename = (payload.filePath || "current file").split(/[\\/]/).pop();
-
-    scenarios[0] = {
-      ...activeScenario,
-      name: `Live: ${filename}`,
-      nodes: ["normal", "warning", "error"],
-      error: {
-        type: `${payload.state} (${payload.score})`,
-        line: changedLineText,
-        time: new Date(payload.timestamp).toLocaleTimeString()
-      },
-      rootCause: payload.analysis,
-      code: {
-        before: payload.codePreview?.before?.length ? payload.codePreview.before : activeScenario.code.before,
-        after: payload.codePreview?.after?.length ? payload.codePreview.after : activeScenario.code.after,
-        problemLine: payload.codePreview?.focusLine || 1
-      },
-      impactFlow: liveDefaults.impactFlow,
-      failingNode: payload.state === "ERROR" ? "Analyzer" : "Timeline",
-      latencyTrace: liveDefaults.latencyTrace,
-      analysis: {
-        summary: payload.analysis,
-        rootCause: reasonText,
-        impact: payload.checkpoint
-          ? `Checkpoint created. State changed from ${payload.previousState} to ${payload.state}.`
-          : `No checkpoint created. State remains ${payload.state}.`
-      }
-    };
-
-    state.scenarioIndex = 0;
-    state.stage = stageByState[payload.state] ?? 0;
-    state.codeState = "after";
-    elements.scenarioSelect.value = "0";
-    updateUI(true);
+    applyThemeClasses();
+    updateView({ animateText: false });
   }
 
   function attachListeners() {
     elements.scenarioSelect.addEventListener("change", (event) => {
-      state.scenarioIndex = Number(event.target.value);
-      state.stage = 0;
-      state.codeState = "before";
-      updateUI(true);
+      setDemoScenario(Number(event.target.value));
     });
 
     elements.scrubber.addEventListener("input", () => {
-      state.stage = Number(elements.scrubber.value);
-      updateUI(false);
+      selectCheckpoint(Number(elements.scrubber.value), { stopReplay: true });
     });
 
     elements.beforeTab.addEventListener("click", () => {
-      state.codeState = "before";
-      updateCode();
+      appState.codeState = "before";
+      updateCode(getSelectedEntry());
       setCodeToggle();
     });
 
     elements.afterTab.addEventListener("click", () => {
-      state.codeState = "after";
-      updateCode();
+      appState.codeState = "after";
+      updateCode(getSelectedEntry());
       setCodeToggle();
     });
 
     elements.jumpRoot.addEventListener("click", () => {
-      const isError = state.stage === 2;
-      if (!isError) {
-        state.stage = 2;
-        updateUI(false);
+      const selected = getSelectedEntry();
+      if (!selected) {
+        return;
       }
+
+      if (selected.state !== "ERROR") {
+        const lastErrorIndex = getActiveEntries().findIndex((entry) => entry.state === "ERROR");
+        if (lastErrorIndex >= 0) {
+          selectCheckpoint(lastErrorIndex, { stopReplay: true });
+        }
+      }
+
       elements.rootCard.scrollIntoView({ behavior: "smooth", block: "center" });
       vscode.postMessage({ type: "jumpToRootCause" });
     });
 
-    elements.previousBtn.addEventListener("click", () => shiftStage(-1));
-    elements.nextBtn.addEventListener("click", () => shiftStage(1));
+    elements.previousBtn.addEventListener("click", () => shiftCheckpoint(-1));
+    elements.nextBtn.addEventListener("click", () => shiftCheckpoint(1));
     elements.replayBtn.addEventListener("click", replayTimeline);
     elements.timelineReplay.addEventListener("click", replayTimeline);
+
     elements.replaySpeed.addEventListener("change", (event) => {
-      state.replaySpeed = event.target.value;
+      appState.replaySpeed = event.target.value;
     });
 
     elements.themeToggle.addEventListener("click", cycleTheme);
@@ -267,12 +213,14 @@
     document.addEventListener("keydown", (event) => {
       if (event.key === "ArrowLeft") {
         event.preventDefault();
-        shiftStage(-1);
+        shiftCheckpoint(-1);
       }
+
       if (event.key === "ArrowRight") {
         event.preventDefault();
-        shiftStage(1);
+        shiftCheckpoint(1);
       }
+
       if (event.code === "Space") {
         event.preventDefault();
         replayTimeline();
@@ -294,131 +242,430 @@
     });
   }
 
-  function shiftStage(delta) {
-    state.stage = Math.max(0, Math.min(2, state.stage + delta));
-    updateUI(false);
+  function handleExtensionMessage(message) {
+    if (!message || (message.type !== "analysisResult" && message.type !== "checkpointTimeline" && message.type !== "historyUpdate")) {
+      return;
+    }
+
+    const payload = message.payload || message;
+    const entries = normalizeHistoryEntries(payload);
+
+    if (!entries.length) {
+      renderEmptyLiveState(payload.filePath);
+      return;
+    }
+
+    appState.mode = "live";
+    appState.liveEntries = entries;
+    appState.selectedIndex = entries.length - 1;
+    appState.codeState = "after";
+    appState.sourceLabel = buildSourceLabel(payload.filePath, entries.length);
+    appState.replayTimer = clearTimer(appState.replayTimer);
+    elements.scenarioRow.classList.add("hidden");
+    updateView({ animateText: true });
+  }
+
+  function normalizeHistoryEntries(payload) {
+    const rawEntries = Array.isArray(payload.timelineHistory)
+      ? payload.timelineHistory
+      : Array.isArray(payload.history)
+        ? payload.history
+        : Array.isArray(payload.entries)
+          ? payload.entries
+          : [];
+
+    if (rawEntries.length > 0) {
+      return rawEntries.map((entry, index) => normalizeEntry(entry, index, payload.filePath));
+    }
+
+    if (payload.timestamp || payload.state) {
+      return [normalizeEntry(payload, 0, payload.filePath)];
+    }
+
+    return [];
+  }
+
+  function normalizeEntry(rawEntry, index, filePath) {
+    const reasons = Array.isArray(rawEntry.reasons)
+      ? rawEntry.reasons.filter(Boolean)
+      : rawEntry.reason
+        ? [String(rawEntry.reason)]
+        : [];
+    const changedLineRanges = Array.isArray(rawEntry.changedLineRanges)
+      ? rawEntry.changedLineRanges
+          .map((range) => Array.isArray(range) && range.length >= 2 ? [Number(range[0]), Number(range[1])] : null)
+          .filter(Boolean)
+      : [];
+    const codePreview = rawEntry.codePreview || {};
+    const score = Number(rawEntry.score);
+
+    return {
+      filePath: rawEntry.filePath || filePath || "",
+      timestamp: formatTimestamp(rawEntry.timestamp, index),
+      state: normalizeState(rawEntry.state),
+      score: Number.isFinite(score) ? score : 0,
+      checkpoint: Boolean(rawEntry.checkpoint),
+      previousState: normalizeState(rawEntry.previousState || rawEntry.previous || "NORMAL"),
+      reasons,
+      analysis: normalizeAnalysisText(rawEntry.analysis, reasons),
+      changedLineRanges,
+      features: rawEntry.features || [],
+      codePreview: {
+        before: ensureLines(codePreview.before),
+        after: ensureLines(codePreview.after),
+        focusLine: Number.isFinite(Number(codePreview.focusLine)) ? Number(codePreview.focusLine) : 1
+      }
+    };
+  }
+
+  function buildDemoTimeline(scenario) {
+    return [
+      {
+        timestamp: new Date(Date.now() - 180000).toISOString(),
+        state: "NORMAL",
+        score: 16,
+        checkpoint: false,
+        previousState: "NORMAL",
+        reasons: ["Baseline snapshot captured."],
+        analysis: "System is healthy and no anomaly is present yet.",
+        changedLineRanges: [],
+        features: ["baseline"],
+        codePreview: scenario.code
+      },
+      {
+        timestamp: new Date(Date.now() - 120000).toISOString(),
+        state: "WARNING",
+        score: 42,
+        checkpoint: false,
+        previousState: "NORMAL",
+        reasons: [scenario.rootCause],
+        analysis: "Risk signals are starting to accumulate.",
+        changedLineRanges: scenario.changedLineRanges,
+        features: ["latency", "retry"],
+        codePreview: scenario.code
+      },
+      {
+        timestamp: new Date(Date.now() - 60000).toISOString(),
+        state: "WARNING",
+        score: 67,
+        checkpoint: false,
+        previousState: "WARNING",
+        reasons: [scenario.analysis.rootCause],
+        analysis: scenario.analysis.summary,
+        changedLineRanges: scenario.changedLineRanges,
+        features: ["impact-growth"],
+        codePreview: scenario.code
+      },
+      {
+        timestamp: new Date().toISOString(),
+        state: "ERROR",
+        score: 91,
+        checkpoint: true,
+        previousState: "WARNING",
+        reasons: [scenario.rootCause, scenario.analysis.rootCause],
+        analysis: scenario.analysis.impact,
+        changedLineRanges: scenario.changedLineRanges,
+        features: ["checkpoint"],
+        codePreview: scenario.code
+      }
+    ];
+  }
+
+  function normalizeAnalysisText(analysis, reasons) {
+    if (typeof analysis === "string") {
+      return analysis;
+    }
+
+    if (analysis && typeof analysis === "object") {
+      const parts = [analysis.summary, analysis.rootCause, analysis.impact].filter(Boolean).map(String);
+      if (parts.length > 0) {
+        return parts.join(" ");
+      }
+    }
+
+    if (reasons.length > 0) {
+      return reasons.join("; ");
+    }
+
+    return "Checkpoint recorded.";
+  }
+
+  function ensureLines(lines) {
+    if (!Array.isArray(lines) || lines.length === 0) {
+      return ["// no preview available"];
+    }
+
+    return lines.map((line) => String(line));
+  }
+
+  function formatTimestamp(timestamp, index) {
+    if (!timestamp) {
+      return `Checkpoint ${index + 1}`;
+    }
+
+    const parsed = new Date(timestamp);
+    if (Number.isNaN(parsed.getTime())) {
+      return String(timestamp);
+    }
+
+    return parsed.toLocaleString();
+  }
+
+  function normalizeState(value) {
+    const normalized = String(value || "NORMAL").trim().toUpperCase();
+    if (normalized === "WARNING" || normalized === "WARN") {
+      return "WARNING";
+    }
+
+    if (normalized === "ERROR" || normalized === "CRITICAL" || normalized === "FAIL") {
+      return "ERROR";
+    }
+
+    return "NORMAL";
+  }
+
+  function buildSourceLabel(filePath, count) {
+    const fileName = filePath ? filePath.split(/[\\/]/).pop() : "Live file";
+    return `${fileName} · ${count} checkpoint${count === 1 ? "" : "s"}`;
+  }
+
+  function setDemoScenario(index) {
+    appState.mode = "demo";
+    appState.demoScenarioIndex = index;
+    appState.demoEntries = buildDemoTimeline(demoScenarios[index]);
+    appState.selectedIndex = appState.demoEntries.length - 1;
+    appState.codeState = "after";
+    appState.sourceLabel = "Demo mode";
+    appState.replayTimer = clearTimer(appState.replayTimer);
+    elements.timelineWrap.classList.remove("replaying");
+    elements.panel.classList.remove("motion-blur");
+    elements.scenarioRow.classList.remove("hidden");
+    updateView({ animateText: false });
+  }
+
+  function renderEmptyLiveState(filePath) {
+    appState.mode = "live";
+    appState.liveEntries = [];
+    appState.selectedIndex = 0;
+    appState.sourceLabel = buildSourceLabel(filePath || "Live file", 0);
+    elements.scenarioRow.classList.add("hidden");
+    updateView({ animateText: false });
+  }
+
+  function getActiveEntries() {
+    return appState.mode === "live" ? appState.liveEntries : appState.demoEntries;
+  }
+
+  function getSelectedEntry() {
+    const entries = getActiveEntries();
+    if (!entries.length) {
+      return undefined;
+    }
+
+    return entries[Math.max(0, Math.min(entries.length - 1, appState.selectedIndex))];
+  }
+
+  function selectCheckpoint(index, options = {}) {
+    const entries = getActiveEntries();
+    if (!entries.length) {
+      return;
+    }
+
+    appState.selectedIndex = Math.max(0, Math.min(entries.length - 1, index));
+    if (options.stopReplay) {
+      appState.replayTimer = clearTimer(appState.replayTimer);
+      elements.timelineWrap.classList.remove("replaying");
+      elements.panel.classList.remove("motion-blur");
+    }
+
+    updateView({ animateText: false });
+  }
+
+  function shiftCheckpoint(delta) {
+    const entries = getActiveEntries();
+    if (!entries.length) {
+      return;
+    }
+
+    selectCheckpoint(appState.selectedIndex + delta, { stopReplay: true });
   }
 
   function replayTimeline() {
-    clearInterval(state.replayTimer);
+    const entries = getActiveEntries();
+    if (!entries.length) {
+      return;
+    }
+
+    appState.replayTimer = clearTimer(appState.replayTimer);
     elements.panel.classList.add("motion-blur");
     elements.timelineWrap.classList.add("replaying");
-    state.stage = 0;
-    updateUI(false);
+    appState.selectedIndex = 0;
+    updateView({ animateText: false });
 
-    state.replayTimer = setInterval(() => {
-      if (state.stage >= 2) {
-        clearInterval(state.replayTimer);
+    let index = 0;
+    appState.replayTimer = setInterval(() => {
+      if (index >= entries.length - 1) {
+        appState.replayTimer = clearTimer(appState.replayTimer);
         elements.panel.classList.remove("motion-blur");
         elements.timelineWrap.classList.remove("replaying");
         return;
       }
-      state.stage += 1;
-      updateUI(false);
-    }, replayDurations[state.replaySpeed]);
+
+      index += 1;
+      appState.selectedIndex = index;
+      updateView({ animateText: false });
+    }, replayDurations[appState.replaySpeed]);
   }
 
-  function updateUI(skipTypingAnimation) {
-    const scenario = scenarios[state.scenarioIndex];
-    elements.scrubber.value = String(state.stage);
-    renderTimelineNodes(scenario.nodes);
-    updateTimelineProgress();
-    updateErrorDetails(scenario);
-    updateRootCause(scenario);
-    updateCode();
+  function clearTimer(timerId) {
+    if (timerId) {
+      clearInterval(timerId);
+    }
+
+    return undefined;
+  }
+
+  function updateView({ animateText }) {
+    const entries = getActiveEntries();
+    const selected = getSelectedEntry();
+
+    elements.timelineSource.textContent = appState.sourceLabel;
+    elements.timelineCount.textContent = entries.length ? `${entries.length} checkpoint${entries.length === 1 ? "" : "s"}` : "";
+    elements.timelineEmpty.classList.toggle("hidden", entries.length > 0);
+    elements.timelineWrap.classList.toggle("hidden", entries.length === 0);
+
+    renderTimelineNodes(entries);
+    updateTimelineProgress(entries);
+
+    if (!selected) {
+      renderEmptyPanels();
+      updateSignalChart([], undefined);
+      return;
+    }
+
+    updateCheckpointDetails(selected);
+    updateCodeImpact(selected);
+    updateCode(selected);
     setCodeToggle();
-    updateImpactFlow(scenario);
-    updateLatencyChart(scenario);
-    updateAnalysis(scenario, skipTypingAnimation);
+    updateImpactFlow(selected);
+    updateSignalChart(entries, selected);
+    updateAnalysis(selected, animateText);
   }
 
-  function renderTimelineNodes(nodeTypes) {
+  function renderEmptyPanels() {
+    elements.stateBadge.textContent = "WAITING";
+    elements.stateBadge.className = "state-badge";
+    elements.checkpointTimestamp.textContent = "No checkpoint history yet.";
+    elements.errorType.textContent = "Waiting for live timeline";
+    elements.errorLine.textContent = "-";
+    elements.errorTime.textContent = "-";
+    elements.rootCard.classList.remove("hidden");
+    elements.rootText.textContent = "Save the file again or let the backend publish history to populate the timeline.";
+    elements.changedLines.innerHTML = '<span class="impact-chip">No changed lines yet</span>';
+    elements.codeWindow.innerHTML = '<div class="code-line"><span class="code-line-number">1</span><span>// waiting for checkpoint data</span></div>';
+    elements.summary.textContent = "Awaiting checkpoint history from the extension bridge.";
+    elements.cause.textContent = "";
+    elements.impact.textContent = "";
+    elements.flow.innerHTML = "";
+    elements.latencyValue.textContent = "0";
+  }
+
+  function renderTimelineNodes(entries) {
     elements.timelineNodes.innerHTML = "";
-    nodeTypes.forEach((type, index) => {
+    if (!entries.length) {
+      return;
+    }
+
+    entries.forEach((entry, index) => {
       const node = document.createElement("button");
       node.type = "button";
-      node.className = `node ${type} ${index === state.stage ? "active" : ""}`;
-      node.setAttribute("aria-label", `Timeline node ${index + 1}: ${type}`);
+      node.className = `node ${stateClass(entry.state)} ${index === appState.selectedIndex ? "active" : ""} ${entry.checkpoint ? "checkpoint" : ""}`;
+      node.setAttribute("aria-label", `Checkpoint ${index + 1}: ${entry.state} at ${entry.timestamp}`);
+      node.title = `${entry.state} · ${entry.timestamp}`;
+      node.textContent = String(index + 1);
       node.addEventListener("click", () => {
-        state.stage = index;
-        updateUI(false);
+        selectCheckpoint(index, { stopReplay: true });
       });
       elements.timelineNodes.appendChild(node);
     });
   }
 
-  function updateTimelineProgress() {
-    const progressRatio = state.stage / 2;
+  function updateTimelineProgress(entries) {
+    if (!entries.length) {
+      elements.timelineProgress.style.width = "0%";
+      return;
+    }
+
+    const span = Math.max(1, entries.length - 1);
+    const progressRatio = Math.min(1, appState.selectedIndex / span);
     elements.timelineProgress.style.width = `${progressRatio * 100}%`;
   }
 
-  function updateErrorDetails(scenario) {
-    const states = [
-      {
-        type: "NominalState",
-        line: "-",
-        time: scenario.error.time
-      },
-      {
-        type: "EarlyWarning",
-        line: scenario.error.line,
-        time: scenario.error.time
-      },
-      scenario.error
-    ];
-    const details = states[state.stage];
-    elements.errorType.textContent = details.type;
-    elements.errorLine.textContent = details.line;
-    elements.errorTime.textContent = details.time;
+  function updateCheckpointDetails(entry) {
+    elements.stateBadge.textContent = entry.state;
+    elements.stateBadge.className = `state-badge ${stateClass(entry.state)}`;
+    elements.checkpointTimestamp.textContent = entry.timestamp;
+    elements.errorType.textContent = `${entry.previousState} -> ${entry.state}`;
+    elements.errorLine.textContent = formatRanges(entry.changedLineRanges);
+    elements.errorTime.textContent = entry.timestamp;
+    elements.rootCard.classList.remove("hidden");
+    elements.rootText.textContent = entry.reasons.length ? entry.reasons.join("; ") : entry.analysis;
   }
 
-  function updateRootCause(scenario) {
-    const isErrorState = state.stage === 2;
-    if (isErrorState) {
-      elements.rootCard.classList.remove("hidden");
-      elements.rootText.textContent = scenario.rootCause;
-      requestAnimationFrame(() => {
-        elements.rootCard.animate(
-          [
-            { opacity: 0, transform: "translateY(8px) scale(0.98)" },
-            { opacity: 1, transform: "translateY(0) scale(1)" }
-          ],
-          { duration: 320, easing: "cubic-bezier(0.2, 0.9, 0.25, 1)" }
-        );
+  function updateCodeImpact(entry) {
+    const chips = [];
+    if (entry.checkpoint) {
+      chips.push('<span class="impact-chip active">Checkpoint</span>');
+    }
+
+    if (entry.changedLineRanges.length > 0) {
+      entry.changedLineRanges.forEach((range) => {
+        chips.push(`<span class="impact-chip active">L${range[0]}-${range[1]}</span>`);
       });
     } else {
-      elements.rootCard.classList.add("hidden");
+      chips.push('<span class="impact-chip">No changed lines</span>');
     }
+
+    if (Array.isArray(entry.features) && entry.features.length > 0) {
+      entry.features.slice(0, 3).forEach((feature) => {
+        chips.push(`<span class="impact-chip">${escapeHtml(String(feature))}</span>`);
+      });
+    }
+
+    elements.changedLines.innerHTML = chips.join("");
   }
 
-  function updateCode() {
-    const { code } = scenarios[state.scenarioIndex];
-    const lines = code[state.codeState];
-    const escaped = lines
+  function updateCode(entry) {
+    const lines = appState.codeState === "before" ? entry.codePreview.before : entry.codePreview.after;
+    const focusLine = Math.max(1, Number(entry.codePreview.focusLine) || 1);
+
+    elements.codeWindow.innerHTML = lines
       .map((line, index) => {
-        const lineClass = index + 1 === code.problemLine ? "code-line problem" : "code-line";
-        return `<div class="${lineClass}"><span class="code-line-number">${index + 1}</span><span>${escapeHtml(line)}</span></div>`;
+        const lineNumber = index + 1;
+        const lineClass = lineNumber === focusLine ? "code-line problem" : "code-line";
+        return `<div class="${lineClass}"><span class="code-line-number">${lineNumber}</span><span>${escapeHtml(line)}</span></div>`;
       })
       .join("");
-
-    elements.codeWindow.innerHTML = escaped;
   }
 
   function setCodeToggle() {
-    const beforeActive = state.codeState === "before";
+    const beforeActive = appState.codeState === "before";
     elements.beforeTab.classList.toggle("active", beforeActive);
     elements.afterTab.classList.toggle("active", !beforeActive);
   }
 
-  function updateImpactFlow(scenario) {
+  function updateImpactFlow(entry) {
+    const flowNodes = ["API", "DB", "Cache"];
+    const failingIndex = entry.state === "ERROR" ? 2 : entry.state === "WARNING" ? 1 : 0;
+
     elements.flow.innerHTML = "";
-    scenario.impactFlow.forEach((node, index) => {
+    flowNodes.forEach((node, index) => {
       const nodeElement = document.createElement("div");
-      nodeElement.className = `flow-node ${node === scenario.failingNode && state.stage === 2 ? "failing" : ""}`;
+      nodeElement.className = `flow-node ${index === failingIndex ? "failing" : ""}`;
       nodeElement.textContent = node;
       elements.flow.appendChild(nodeElement);
 
-      if (index < scenario.impactFlow.length - 1) {
+      if (index < flowNodes.length - 1) {
         const link = document.createElement("span");
         link.className = "flow-link";
         elements.flow.appendChild(link);
@@ -426,42 +673,17 @@
     });
   }
 
-  function updateAnalysis(scenario, skipTypingAnimation) {
-    const entries = [
-      [elements.summary, scenario.analysis.summary],
-      [elements.cause, scenario.analysis.rootCause],
-      [elements.impact, scenario.analysis.impact]
-    ];
-
-    if (skipTypingAnimation) {
-      entries.forEach(([element, text]) => {
-        element.textContent = text;
-      });
-      return;
-    }
-
-    entries.forEach(([element, text], index) => {
-      element.textContent = "";
-      const words = text.split(" ");
-      words.forEach((word, wordIndex) => {
-        setTimeout(() => {
-          element.textContent += `${word}${wordIndex < words.length - 1 ? " " : ""}`;
-        }, index * 120 + wordIndex * 22);
-      });
-    });
-  }
-
-  function updateLatencyChart(scenario) {
-    const points = scenario.latencyTrace;
+  function updateSignalChart(entries, selectedEntry) {
+    const values = entries.length > 0 ? entries.map((entry) => entry.score) : [0];
     const width = 180;
     const height = 54;
     const padding = 6;
-    const min = Math.min(...points);
-    const max = Math.max(...points);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
     const span = Math.max(1, max - min);
 
-    const coords = points.map((value, index) => {
-      const x = padding + (index * (width - padding * 2)) / (points.length - 1);
+    const coords = values.map((value, index) => {
+      const x = padding + (index * (width - padding * 2)) / Math.max(1, values.length - 1);
       const y = height - padding - ((value - min) * (height - padding * 2)) / span;
       return [x, y];
     });
@@ -470,39 +692,89 @@
       .map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`)
       .join(" ");
 
-    const stageIndex = state.stage * 4;
-    const safeIndex = Math.max(0, Math.min(points.length - 1, stageIndex));
-    const [dotX, dotY] = coords[safeIndex];
+    const selectedPoint = Math.max(0, Math.min(coords.length - 1, appState.selectedIndex));
+    const [dotX, dotY] = coords[selectedPoint];
 
     elements.sparklinePath.setAttribute("d", path);
     elements.sparklineDot.setAttribute("cx", dotX.toFixed(2));
     elements.sparklineDot.setAttribute("cy", dotY.toFixed(2));
-    elements.latencyValue.textContent = `${points[safeIndex]} ms`;
+    elements.latencyValue.textContent = selectedEntry ? `${selectedEntry.score}` : "0";
+  }
+
+  function updateAnalysis(entry, animateText) {
+    const summary = entry.analysis;
+    const cause = entry.reasons.length ? entry.reasons.join("; ") : "No reasons recorded.";
+    const impact = `${entry.checkpoint ? "Checkpoint saved." : "Checkpoint not persisted yet."} Previous state: ${entry.previousState}. Changed lines: ${formatRanges(entry.changedLineRanges)}.`;
+
+    if (!animateText) {
+      elements.summary.textContent = summary;
+      elements.cause.textContent = cause;
+      elements.impact.textContent = impact;
+      return;
+    }
+
+    typeText(elements.summary, summary, 0);
+    typeText(elements.cause, cause, 120);
+    typeText(elements.impact, impact, 240);
+  }
+
+  function typeText(element, text, delay) {
+    element.textContent = "";
+    const words = text.split(" ");
+    words.forEach((word, index) => {
+      setTimeout(() => {
+        element.textContent += `${word}${index < words.length - 1 ? " " : ""}`;
+      }, delay + index * 22);
+    });
+  }
+
+  function stateClass(state) {
+    const normalized = normalizeState(state);
+    return normalized === "WARNING" ? "warning" : normalized === "ERROR" ? "error" : "normal";
+  }
+
+  function formatRanges(ranges) {
+    if (!Array.isArray(ranges) || ranges.length === 0) {
+      return "-";
+    }
+
+    return ranges
+      .map((range) => {
+        if (!Array.isArray(range) || range.length < 2) {
+          return "-";
+        }
+
+        return `L${range[0]}-${range[1]}`;
+      })
+      .filter((value) => value !== "-")
+      .join(", ");
   }
 
   function cycleTheme() {
     const sequence = ["auto", "dark", "light"];
-    const currentIndex = sequence.indexOf(state.theme);
-    state.theme = sequence[(currentIndex + 1) % sequence.length];
+    const currentIndex = sequence.indexOf(appState.theme);
+    appState.theme = sequence[(currentIndex + 1) % sequence.length];
+    applyThemeClasses();
+    elements.themeToggle.textContent = appState.theme[0].toUpperCase() + appState.theme.slice(1);
+  }
 
+  function applyThemeClasses() {
     document.body.classList.remove("theme-auto", "theme-dark", "theme-light");
-    document.body.classList.add(`theme-${state.theme}`);
+    document.body.classList.add(`theme-${appState.theme}`);
 
-    if (state.theme === "dark") {
+    if (appState.theme === "dark") {
       document.body.classList.remove("vscode-light");
       document.body.classList.add("vscode-dark");
-    } else if (state.theme === "light") {
+    } else if (appState.theme === "light") {
       document.body.classList.remove("vscode-dark");
       document.body.classList.add("vscode-light");
     }
-
-    elements.themeToggle.textContent = state.theme[0].toUpperCase() + state.theme.slice(1);
   }
 
   function cycleTypography() {
-    state.typography = state.typography === "mono" ? "elegant" : "mono";
-    document.body.classList.toggle("typography-elegant", state.typography === "elegant");
-    elements.fontToggle.textContent = state.typography === "mono" ? "Mono" : "Elegant";
+    appState.typography = appState.typography === "mono" ? "elegant" : "mono";
+    document.body.classList.toggle("typography-elegant", appState.typography === "elegant");
+    elements.fontToggle.textContent = appState.typography === "mono" ? "Mono" : "Elegant";
   }
 
   function setupRevealAnimations() {
@@ -525,7 +797,7 @@
   }
 
   function escapeHtml(text) {
-    return text
+    return String(text)
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
       .replaceAll(">", "&gt;")
