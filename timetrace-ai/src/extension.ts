@@ -5,12 +5,16 @@ import {
 	type CodePreviewRecord,
 	type TimelineCheckpointRecord,
 } from './ai/snapshotStore';
-import { emptyGraph, updateGraphForFile } from './ai/dependencyGraph';
+import { emptyGraph, updateGraphForFile, type WorkspaceGraph } from './ai/dependencyGraph';
 import type { TimeTraceAnalysisResult } from './ai';
 
 interface SidebarTimelinePayload {
 	filePath: string;
 	timelineHistory: TimelineCheckpointRecord[];
+}
+
+interface SidebarAnalysisPayload extends TimeTraceAnalysisResult {
+	filePath: string;
 }
 
 function buildCodePreview(previousCode: string, currentCode: string, changedLineRanges: number[][]): CodePreviewRecord {
@@ -70,6 +74,18 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 	}
 
+	function publishLatestAnalysisForFile(filePath: string): void {
+		const latest = snapshotStore.getLatestAnalysis(filePath);
+		if (!latest) {
+			return;
+		}
+
+		provider.publishAnalysisResult({
+			filePath,
+			...latest.result,
+		});
+	}
+
 	function syncSidebarForDocument(document?: vscode.TextDocument): void {
 		if (!document || document.isUntitled || document.uri.scheme !== 'file') {
 			provider.publishTimeline({
@@ -80,9 +96,42 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		publishTimelineForFile(document.uri.fsPath);
+		publishLatestAnalysisForFile(document.uri.fsPath);
 	}
 
-	function analyzeDocument(document: vscode.TextDocument) {
+	async function rebuildWorkspaceGraph(activeDocument: vscode.TextDocument, currentCode: string): Promise<WorkspaceGraph> {
+		const graphSeed = emptyGraph();
+		const uris = await vscode.workspace.findFiles(
+			'**/*.{ts,tsx,js,jsx}',
+			'**/{node_modules,out,dist,.git,.vscode-test}/**',
+			500,
+		);
+
+		let graph = graphSeed;
+		const activePath = activeDocument.uri.fsPath;
+		const seenPaths = new Set<string>();
+
+		for (const uri of uris) {
+			const filePath = uri.fsPath;
+			seenPaths.add(filePath);
+			try {
+				const code = filePath === activePath
+					? currentCode
+					: Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+				graph = updateGraphForFile(graph, filePath, code, workspaceRoot);
+			} catch {
+				// Skip unreadable files so the save pipeline still completes.
+			}
+		}
+
+		if (!seenPaths.has(activePath)) {
+			graph = updateGraphForFile(graph, activePath, currentCode, workspaceRoot);
+		}
+
+		return graph;
+	}
+
+	async function analyzeDocument(document: vscode.TextDocument) {
 		if (document.isUntitled || document.uri.scheme !== 'file') {
 			return undefined;
 		}
@@ -93,12 +142,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 		if (!previousSnapshot) {
 			// First save — update graph, store baseline snapshot
-			const graph = updateGraphForFile(
-				snapshotStore.getWorkspaceGraph() ?? emptyGraph(),
-				document.uri.fsPath,
-				currentCode,
-				workspaceRoot,
-			);
+			const graph = await rebuildWorkspaceGraph(document, currentCode);
 			snapshotStore.saveWorkspaceGraph(graph);
 			snapshotStore.saveSnapshot({
 				filePath: document.uri.fsPath,
@@ -112,12 +156,7 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 
 		// Update graph for this file
-		const graph = updateGraphForFile(
-			snapshotStore.getWorkspaceGraph() ?? emptyGraph(),
-			document.uri.fsPath,
-			currentCode,
-			workspaceRoot,
-		);
+		const graph = await rebuildWorkspaceGraph(document, currentCode);
 		snapshotStore.saveWorkspaceGraph(graph);
 
 		// Run the full 6-step analysis pipeline
@@ -173,6 +212,10 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.window.setStatusBarMessage(statusMsg, 4000);
 
 		publishTimelineForFile(document.uri.fsPath);
+		provider.publishAnalysisResult({
+			filePath: document.uri.fsPath,
+			...result,
+		});
 
 		if (result.checkpoint) {
 			outputChannel.appendLine(
@@ -193,20 +236,20 @@ export function activate(context: vscode.ExtensionContext) {
 		}),
 	);
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
-		analyzeDocument(document);
+		void analyzeDocument(document);
 	}));
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
 		syncSidebarForDocument(editor?.document);
 	}));
 
-	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', () => {
+	const analyzeCurrentDocumentCommand = vscode.commands.registerCommand('timetrace-ai.analyzeCurrentDocument', async () => {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			void vscode.window.showWarningMessage('Open a file first to analyze it.');
 			return;
 		}
 
-		const result = analyzeDocument(editor.document);
+		const result = await analyzeDocument(editor.document);
 		if (!result) {
 			void vscode.window.showInformationMessage('Baseline snapshot captured. Edit and save the file again to trigger analysis.');
 			return;
@@ -249,6 +292,10 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 				type: 'historyUpdate';
 				payload: SidebarTimelinePayload;
 		  }
+		| {
+				type: 'analysisResult';
+				payload: SidebarAnalysisPayload;
+		  }
 		| undefined;
 
 	public constructor(private readonly extensionUri: vscode.Uri) {}
@@ -256,6 +303,14 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 	public publishTimeline(payload: SidebarTimelinePayload): void {
 		this.lastMessage = {
 			type: 'historyUpdate',
+			payload,
+		};
+		this.postLastMessage();
+	}
+
+	public publishAnalysisResult(payload: SidebarAnalysisPayload): void {
+		this.lastMessage = {
+			type: 'analysisResult',
 			payload,
 		};
 		this.postLastMessage();

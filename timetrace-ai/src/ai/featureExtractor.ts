@@ -298,11 +298,23 @@ export function extractFeatures(input: {
 	const prevSigs = extractExportSignatures(input.language, input.previousCode);
 	const currSigs = extractExportSignatures(input.language, input.currentCode);
 	const exportedNamesChanged: string[] = [];
+	const changedSet = new Set<string>();
 	for (const [name, sig] of currSigs) {
 		if (prevSigs.has(name) && prevSigs.get(name) !== sig) {
-			exportedNamesChanged.push(name);
+			changedSet.add(name);
+		}
+		if (!prevSigs.has(name)) {
+			changedSet.add(name);
 		}
 	}
+
+	for (const name of prevSigs.keys()) {
+		if (!currSigs.has(name)) {
+			changedSet.add(name);
+		}
+	}
+
+	exportedNamesChanged.push(...changedSet);
 
 	// Attribute feature flags to specific line ranges (best-effort)
 	const featureLineRanges: Partial<Record<FindingKind, [number, number]>> = {};

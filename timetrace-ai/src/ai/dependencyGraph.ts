@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as ts from 'typescript';
 
@@ -41,18 +42,28 @@ function resolveImportPath(importSpec: string, fromFile: string, workspaceRoot: 
 
 	// Try common extensions
 	const candidates = [
-		resolved,
 		`${resolved}.ts`,
 		`${resolved}.tsx`,
 		`${resolved}.js`,
+		`${resolved}.jsx`,
+		`${resolved}.mjs`,
+		`${resolved}.cjs`,
+		path.join(resolved, 'index.ts'),
+		path.join(resolved, 'index.tsx'),
 		`${resolved}/index.ts`,
+		`${resolved}/index.tsx`,
 		`${resolved}/index.js`,
+		`${resolved}/index.jsx`,
 	];
 
-	// Return the first candidate that is within the workspace root
+	// Return the first candidate that exists on disk within the workspace root.
 	for (const candidate of candidates) {
-		if (candidate.startsWith(workspaceRoot)) {
-			return candidate;
+		if (!candidate.startsWith(workspaceRoot)) {
+			continue;
+		}
+
+		if (fs.existsSync(candidate)) {
+			return path.normalize(candidate);
 		}
 	}
 

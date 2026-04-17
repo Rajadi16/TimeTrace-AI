@@ -420,6 +420,18 @@
   }
 
   function normalizeFileContext(rawItem) {
+    if (typeof rawItem === "string") {
+      const filePathValue = rawItem.trim();
+      if (!filePathValue) {
+        return undefined;
+      }
+
+      return {
+        filePath: filePathValue,
+        reason: "Contextual file"
+      };
+    }
+
     if (!rawItem || typeof rawItem !== "object") {
       return undefined;
     }
@@ -1183,8 +1195,8 @@
     return items
       .map((item) => `
         <article class="context-item">
-          <strong>${escapeHtml(String(item.filePath || ""))}</strong>
-          <p>${escapeHtml(String(item.reason || "Contextual file"))}</p>
+          <strong>${escapeHtml(String(typeof item === "string" ? item : item.filePath || ""))}</strong>
+          <p>${escapeHtml(String(typeof item === "string" ? "Contextual file" : item.reason || "Contextual file"))}</p>
         </article>
       `)
       .join("");
