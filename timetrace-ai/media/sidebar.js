@@ -106,18 +106,35 @@
     overviewRootCauseList: document.getElementById("overview-root-cause-list"),
     rootCard: document.getElementById("root-cause-card"),
     rootCauseList: document.getElementById("root-cause-list"),
+    snippetLayout: document.querySelector(".snippet-layout"),
+    beforeSnippetPanel: document.getElementById("before-snippet-panel"),
+    afterSnippetPanel: document.getElementById("after-snippet-panel"),
     beforeCodeWindow: document.getElementById("before-code-window"),
     afterCodeWindow: document.getElementById("after-code-window"),
     beforeFocusLine: document.getElementById("before-focus-line"),
     afterFocusLine: document.getElementById("after-focus-line"),
+    snippetTabBefore: document.getElementById("snippet-tab-before"),
+    snippetTabAfter: document.getElementById("snippet-tab-after"),
+    snippetModeTab: document.getElementById("snippet-mode-tab"),
+    snippetModeSplit: document.getElementById("snippet-mode-split"),
     codeNavActions: document.getElementById("code-nav-actions"),
     codeGoLineInput: document.getElementById("code-go-line-input"),
     codeGoLineBtn: document.getElementById("code-go-line-btn"),
     codeFlowSummary: document.getElementById("code-flow-summary"),
+    flowHeroHost: document.getElementById("flow-hero-host"),
+    flowLaneHost: document.getElementById("flow-lane-host"),
     codeFlowNodes: document.getElementById("code-flow-nodes"),
     changedLines: document.getElementById("changed-lines"),
+    findingsOverview: document.getElementById("findings-overview"),
     findingsList: document.getElementById("findings-list"),
+    incidentOverview: document.getElementById("incident-overview"),
+    incidentSearchInput: document.getElementById("incident-search-input"),
+    incidentStatusFilter: document.getElementById("incident-status-filter"),
+    incidentRuntimeOnly: document.getElementById("incident-runtime-only"),
+    incidentFilterReset: document.getElementById("incident-filter-reset"),
     runtimeEventsList: document.getElementById("runtime-events-list"),
+    runtimeEventsCount: document.getElementById("runtime-events-count"),
+    runtimeEventsLoaded: document.getElementById("runtime-events-loaded"),
     runtimeDetailType: document.getElementById("runtime-detail-type"),
     runtimeDetailStatus: document.getElementById("runtime-detail-status"),
     runtimeDetailMessage: document.getElementById("runtime-detail-message"),
@@ -125,26 +142,26 @@
     runtimeDetailFile: document.getElementById("runtime-detail-file"),
     runtimeDetailLine: document.getElementById("runtime-detail-line"),
     runtimeDetailCheckpoint: document.getElementById("runtime-detail-checkpoint"),
-    runtimeDetailStack: document.getElementById("runtime-detail-stack"),
     incidentList: document.getElementById("incident-list"),
     incidentDetailSummary: document.getElementById("incident-detail-summary"),
     incidentDetailStatus: document.getElementById("incident-detail-status"),
     incidentDetailRuntimeConfirmation: document.getElementById("incident-detail-runtime-confirmation"),
-    incidentDetailSeverity: document.getElementById("incident-detail-severity"),
     incidentDetailFile: document.getElementById("incident-detail-file"),
     incidentDetailCheckpoint: document.getElementById("incident-detail-checkpoint"),
     incidentDetailRuntimeCount: document.getElementById("incident-detail-runtime-count"),
     incidentDetailLastRuntime: document.getElementById("incident-detail-last-runtime"),
     incidentDetailReason: document.getElementById("incident-detail-reason"),
-    incidentDetailFindings: document.getElementById("incident-detail-findings"),
-    incidentDetailCauses: document.getElementById("incident-detail-causes"),
-    incidentDetailRuntimeEvents: document.getElementById("incident-detail-runtime-events"),
+    incidentDetailEvidence: document.getElementById("incident-detail-evidence"),
     relatedFilesList: document.getElementById("related-files-list"),
     impactedFilesList: document.getElementById("impacted-files-list"),
     summary: document.getElementById("analysis-summary"),
     timelineRewind: document.getElementById("timeline-rewind"),
     timelineWrap: document.getElementById("timeline-wrap"),
-    sparklinePath: document.getElementById("sparkline-path"),
+    sparklinePathBase: document.getElementById("sparkline-path-base"),
+    sparklinePathUp: document.getElementById("sparkline-path-up"),
+    sparklinePathDown: document.getElementById("sparkline-path-down"),
+    sparklinePathFlat: document.getElementById("sparkline-path-flat"),
+    sparklineArea: document.getElementById("sparkline-area"),
     sparklineDot: document.getElementById("sparkline-dot"),
     latencyValue: document.getElementById("latency-value"),
     paneButtons: Array.from(document.querySelectorAll(".pane-btn")),
@@ -166,11 +183,30 @@
     sourceLabel: "Demo mode",
     activePane: "overview",
     codePane: undefined,
+    snippetViewMode: "tab",
+    activeSnippetTab: "after",
     timelineItems: [],
     selectedIncidentId: undefined,
+    incidentSearchQuery: "",
+    incidentStatusFilter: "all",
+    incidentRuntimeOnly: false,
     selectedRuntimeEventId: undefined,
+    runtimeEventsVisibleCount: 0,
+    runtimeEventsSourceKey: undefined,
+    findingsVisibleCount: 0,
+    findingsSourceKey: undefined,
+    incidentsVisibleCount: 0,
+    incidentsSourceKey: undefined,
+    incidentLinkedVisibleCount: {
+      evidence: 0,
+    },
+    incidentLinkedSourceKeys: {
+      evidence: undefined,
+    },
     selectedFindingId: undefined,
-    selectedRootCauseFile: undefined
+    selectedRootCauseFile: undefined,
+    signalDotX: undefined,
+    signalDotY: undefined
   };
 
   function init() {
@@ -193,6 +229,7 @@
     attachListeners();
     setupRevealAnimations();
     applyThemeClasses();
+    restorePersistedUiState();
     updateView({ animateText: false });
   }
 
@@ -216,11 +253,79 @@
       });
     }
 
+    if (elements.snippetTabBefore) {
+      elements.snippetTabBefore.addEventListener("click", () => {
+        appState.activeSnippetTab = "before";
+        updateSnippetPresentation();
+      });
+    }
+
+    if (elements.snippetTabAfter) {
+      elements.snippetTabAfter.addEventListener("click", () => {
+        appState.activeSnippetTab = "after";
+        updateSnippetPresentation();
+      });
+    }
+
+    if (elements.snippetModeTab) {
+      elements.snippetModeTab.addEventListener("click", () => {
+        appState.snippetViewMode = "tab";
+        updateSnippetPresentation();
+      });
+    }
+
+    if (elements.snippetModeSplit) {
+      elements.snippetModeSplit.addEventListener("click", () => {
+        appState.snippetViewMode = "split";
+        updateSnippetPresentation();
+      });
+    }
+
     if (elements.timelinePlayPause) {
       elements.timelinePlayPause.addEventListener("click", toggleReplay);
     }
     if (elements.timelineRewind) {
       elements.timelineRewind.addEventListener("click", () => shiftCheckpoint(-1));
+    }
+
+    if (elements.incidentSearchInput) {
+      elements.incidentSearchInput.addEventListener("input", () => {
+        appState.incidentSearchQuery = String(elements.incidentSearchInput.value || "").trim();
+        refreshIncidentWorkspace();
+        persistUiState();
+      });
+    }
+    if (elements.incidentStatusFilter) {
+      elements.incidentStatusFilter.addEventListener("change", () => {
+        appState.incidentStatusFilter = String(elements.incidentStatusFilter.value || "all");
+        refreshIncidentWorkspace();
+        persistUiState();
+      });
+    }
+    if (elements.incidentRuntimeOnly) {
+      elements.incidentRuntimeOnly.addEventListener("change", () => {
+        appState.incidentRuntimeOnly = Boolean(elements.incidentRuntimeOnly.checked);
+        refreshIncidentWorkspace();
+        persistUiState();
+      });
+    }
+    if (elements.incidentFilterReset) {
+      elements.incidentFilterReset.addEventListener("click", () => {
+        appState.incidentSearchQuery = "";
+        appState.incidentStatusFilter = "all";
+        appState.incidentRuntimeOnly = false;
+        if (elements.incidentSearchInput) {
+          elements.incidentSearchInput.value = "";
+        }
+        if (elements.incidentStatusFilter) {
+          elements.incidentStatusFilter.value = "all";
+        }
+        if (elements.incidentRuntimeOnly) {
+          elements.incidentRuntimeOnly.checked = false;
+        }
+        refreshIncidentWorkspace();
+        persistUiState();
+      });
     }
 
     elements.timelineWrap.addEventListener("scroll", () => {
@@ -231,6 +336,17 @@
       elements.timelineWrap.scrollLeft = elements.timelineStamps.scrollLeft;
     });
 
+    // Parallax effect for flow diagram
+    const contentArea = document.querySelector(".sidebar-content") || document.documentElement;
+    contentArea.addEventListener("scroll", () => {
+      const parallaxElement = document.querySelector("[data-parallax-target]");
+      if (parallaxElement && contentArea) {
+        const scrollY = contentArea.scrollTop || window.scrollY;
+        const offset = scrollY * 0.08; // Subtle parallax multiplier
+        parallaxElement.style.transform = `translateY(${offset}px)`;
+      }
+    }, { passive: true });
+
     elements.paneButtons.forEach((button) => {
       button.addEventListener("click", () => {
         const pane = button.getAttribute("data-pane-target");
@@ -239,10 +355,36 @@
         }
         appState.activePane = pane;
         applyPaneVisibility();
+        persistUiState();
       });
     });
 
     document.addEventListener("keydown", (event) => {
+      if (isTypingTarget(event.target) && event.key !== "Escape") {
+        return;
+      }
+
+      if (event.key === "/") {
+        event.preventDefault();
+        if (elements.incidentSearchInput) {
+          elements.incidentSearchInput.focus();
+          elements.incidentSearchInput.select();
+        }
+        return;
+      }
+
+      if (event.key.toLowerCase() === "j") {
+        event.preventDefault();
+        selectIncidentByDelta(1);
+        return;
+      }
+
+      if (event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        selectIncidentByDelta(-1);
+        return;
+      }
+
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         shiftCheckpoint(-1);
@@ -342,7 +484,6 @@
     appState.sourceLabel = buildSourceLabel(payload.filePath, entries.length);
     appState.replayTimer = clearTimer(appState.replayTimer);
     elements.scenarioRow.classList.add("hidden");
-    appState.activePane = "overview";
     updateView({ animateText: true });
   }
 
@@ -1233,6 +1374,7 @@
     elements.scenarioRow.classList.remove("hidden");
     appState.activePane = "overview";
     updateView({ animateText: false });
+    persistUiState();
   }
 
   function renderEmptyLiveState(filePath) {
@@ -1244,6 +1386,7 @@
     appState.sourceLabel = buildSourceLabel(filePath || "Live file", 0);
     elements.scenarioRow.classList.add("hidden");
     updateView({ animateText: false });
+    persistUiState();
   }
 
   function getActiveEntries() {
@@ -1366,13 +1509,10 @@
     }
 
     updateCheckpointDetails(selected);
-    renderFindings(selected.findings);
-    renderRootCauseCandidates(selected.probableRootCauses);
+    renderFindings(selected.findings, selected);
   renderRuntimeEvents(selected.runtimeEvents, selected);
   renderIncidentList(selected.incidents, selected);
   renderIncidentDetail(selected, getSelectedIncident(selected));
-  renderUnifiedTimeline(selected);
-    renderFileContext(selected.relatedFiles, selected.impactedFiles);
     updateCode(selected);
     updateSignalChart(entries, selected);
     updateAnalysis(selected, animateText);
@@ -1385,18 +1525,17 @@
     elements.checkpointTransition.textContent = "Awaiting checkpoint";
     elements.checkpointSummary.textContent = "Save the file again or let the backend publish history to populate the structured debugger panels.";
     elements.checkpointTimestamp.textContent = "No checkpoint history yet.";
-    elements.rootCard.classList.remove("hidden");
-    elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
-    elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
-    elements.overviewRootCauseSummary.textContent = "AI inferred causes will appear when findings are available.";
+    if (elements.findingsOverview) {
+      elements.findingsOverview.textContent = "No findings available yet.";
+    }
+    if (elements.incidentOverview) {
+      elements.incidentOverview.textContent = "No incidents available yet.";
+    }
     elements.findingsList.innerHTML = '<div class="empty-state">No findings yet.</div>';
     elements.runtimeEventsList.innerHTML = '<div class="empty-state">No runtime events captured yet.</div>';
-    elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
     elements.incidentList.innerHTML = '<div class="empty-state">No incidents yet.</div>';
     renderEmptyRuntimeDetail();
     renderEmptyIncidentDetail();
-    elements.relatedFilesList.innerHTML = '<div class="empty-state">No related files yet.</div>';
-    elements.impactedFilesList.innerHTML = '<div class="empty-state">No impacted files yet.</div>';
     elements.changedLines.innerHTML = '<span class="impact-chip">No changed lines yet</span>';
     elements.beforeCodeWindow.innerHTML = '<div class="code-line"><span class="code-line-number">1</span><span>// waiting for checkpoint data</span></div>';
     elements.afterCodeWindow.innerHTML = '<div class="code-line"><span class="code-line-number">1</span><span>// waiting for checkpoint data</span></div>';
@@ -1404,9 +1543,26 @@
     elements.afterFocusLine.textContent = "Focus L-";
     elements.codeNavActions.innerHTML = '<div class="empty-state">No navigation targets available yet.</div>';
     elements.codeFlowSummary.textContent = "Flow will appear after analysis payload arrives.";
-    elements.codeFlowNodes.innerHTML = '<div class="empty-state">No flow inference available yet.</div>';
-    elements.summary.textContent = "Awaiting checkpoint history from the extension bridge.";
-    elements.latencyValue.textContent = "0";
+    if (elements.flowHeroHost) {
+      elements.flowHeroHost.classList.add("is-visible");
+      elements.flowHeroHost.innerHTML = '<div class="empty-state">No flow inference available yet.</div>';
+    }
+    if (elements.flowLaneHost) {
+      elements.flowLaneHost.classList.remove("is-visible");
+      elements.flowLaneHost.innerHTML = "";
+    }
+    const flowGraph = document.getElementById("flow-graph-svg");
+    if (flowGraph) {
+      flowGraph.classList.add("is-hidden");
+    }
+    const flowEdges = document.getElementById("flow-edges");
+    const flowNodes = document.getElementById("flow-svg-nodes");
+    if (flowEdges) {
+      flowEdges.innerHTML = "";
+    }
+    if (flowNodes) {
+      flowNodes.innerHTML = "";
+    }
   }
 
   function updateHeader(selected, entryCount) {
@@ -1533,8 +1689,6 @@
     elements.checkpointTransition.textContent = `${entry.previousState} → ${entry.state}`;
     elements.checkpointSummary.textContent = entry.analysis;
     elements.checkpointTimestamp.textContent = entry.timestamp;
-    elements.rootCard.classList.remove("hidden");
-    renderCompatibilitySummary(entry);
   }
 
   function updateTransportControls() {
@@ -1547,14 +1701,46 @@
     elements.timelinePlayPause.title = appState.isReplaying ? "Pause" : "Play";
   }
 
-  function renderFindings(findings) {
+  function renderFindings(findings, selectedEntry, options = {}) {
     if (!Array.isArray(findings) || findings.length === 0) {
+      appState.findingsVisibleCount = 0;
+      appState.findingsSourceKey = undefined;
+      if (elements.findingsOverview) {
+        elements.findingsOverview.textContent = "No findings detected for this checkpoint.";
+      }
       elements.findingsList.innerHTML = '<div class="empty-state">No findings detected.</div>';
       return;
     }
 
-    elements.findingsList.innerHTML = findings
+    const batchSize = 14;
+    const sourceKey = `${selectedEntry?.checkpointId || "none"}:${findings.length}`;
+    if (appState.findingsSourceKey !== sourceKey) {
+      appState.findingsSourceKey = sourceKey;
+      appState.findingsVisibleCount = Math.min(batchSize, findings.length);
+    } else {
+      appState.findingsVisibleCount = Math.max(1, Math.min(appState.findingsVisibleCount, findings.length));
+    }
+
+    const visibleFindings = findings.slice(0, appState.findingsVisibleCount);
+
+    const bySeverity = findings.reduce((acc, finding) => {
+      const severity = String(finding.severity || "WARNING").toUpperCase();
+      acc[severity] = (acc[severity] || 0) + 1;
+      return acc;
+    }, {});
+    const topConfidence = Math.max(...findings.map((finding) => Math.round(Number(finding.confidence || 0) * 100)));
+    if (elements.findingsOverview) {
+      const loadedText = appState.findingsVisibleCount >= findings.length
+        ? `all loaded (${findings.length})`
+        : `loaded ${appState.findingsVisibleCount} of ${findings.length}`;
+      elements.findingsOverview.textContent = `${findings.length} finding${findings.length === 1 ? "" : "s"} • ${bySeverity.ERROR || 0} critical • ${bySeverity.WARNING || 0} warning • top confidence ${topConfidence}% • ${loadedText}`;
+    }
+
+    elements.findingsList.innerHTML = visibleFindings
       .map((finding) => {
+        const confidencePct = Math.round(Number(finding.confidence || 0) * 100);
+        const findingKind = finding.kind ? String(finding.kind) : "General";
+        const evidence = finding.evidence ? String(finding.evidence) : "";
         const lineRanges = Array.isArray(finding.lineRanges) && finding.lineRanges.length > 0
           ? finding.lineRanges.map((range) => `L${range[0]}-${range[1]}`).join(", ")
           : "-";
@@ -1563,20 +1749,56 @@
           <article class="finding-item finding-${String(finding.severity || "WARNING").toLowerCase()}">
             <div class="finding-topline">
               <span class="mini-pill">${escapeHtml(String(finding.severity || "WARNING"))}</span>
-              <strong>${escapeHtml(String((Number(finding.confidence) * 100).toFixed(0)))}%</strong>
+              <span class="mini-pill">${escapeHtml(findingKind)}</span>
             </div>
-            <p>${escapeHtml(String(finding.message || "Finding"))}</p>
+            <p class="finding-message">${escapeHtml(String(finding.message || "Finding"))}</p>
+            <div class="finding-confidence-row">
+              <span>Confidence</span>
+              <div class="finding-confidence-track" role="presentation">
+                <span class="finding-confidence-fill" style="width:${Math.max(6, Math.min(100, confidencePct))}%"></span>
+              </div>
+              <strong>${escapeHtml(String(confidencePct))}%</strong>
+            </div>
             <div class="finding-meta">
               <span>${escapeHtml(lineRanges)}</span>
               ${symbol}
             </div>
+            ${evidence ? `<p class="finding-evidence">${escapeHtml(evidence)}</p>` : ""}
           </article>
         `;
       })
       .join("");
+
+    const findingsEl = elements.findingsList;
+    findingsEl.onscroll = () => {
+      const nearBottom = findingsEl.scrollTop + findingsEl.clientHeight >= findingsEl.scrollHeight - 24;
+      const canLoadMore = appState.findingsVisibleCount < findings.length;
+      if (!nearBottom || !canLoadMore) {
+        return;
+      }
+
+      const prevScrollTop = findingsEl.scrollTop;
+      const prevScrollHeight = findingsEl.scrollHeight;
+      appState.findingsVisibleCount = Math.min(findings.length, appState.findingsVisibleCount + batchSize);
+      renderFindings(findings, selectedEntry, {
+        preserveScroll: true,
+        prevScrollTop,
+        prevScrollHeight,
+      });
+    };
+
+    if (options.preserveScroll) {
+      const prevTop = Number(options.prevScrollTop || 0);
+      const prevHeight = Number(options.prevScrollHeight || 0);
+      requestAnimationFrame(() => {
+        const growth = elements.findingsList.scrollHeight - prevHeight;
+        elements.findingsList.scrollTop = Math.max(0, prevTop + Math.max(0, growth));
+      });
+    }
   }
 
   function renderRootCauseCandidates(probableRootCauses) {
+    elements.rootCard.classList.remove("hidden");
     if (!Array.isArray(probableRootCauses) || probableRootCauses.length === 0) {
       elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
       elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
@@ -1585,25 +1807,62 @@
     }
 
     const renderedRootCauses = probableRootCauses
-      .map((candidate, index) => `
-        <article class="root-cause-item">
-          <div class="ranking-index">${index + 1}</div>
-          <div class="root-cause-body">
-            <div class="finding-topline">
-              <strong>${escapeHtml(String(candidate.filePath || ""))}</strong>
-              <span class="mini-pill">${escapeHtml(String((Number(candidate.confidence) * 100).toFixed(0)))}%</span>
+      .map((candidate, index) => {
+        const confidence = Math.round(Number(candidate.confidence || 0) * 100);
+        const signals = Array.isArray(candidate.signals) ? candidate.signals : [];
+        const evidence = Array.isArray(candidate.linkedEvidence) ? candidate.linkedEvidence : [];
+        const hasDetails = signals.length > 0 || evidence.length > 0;
+        
+        return `
+          <article class="root-cause-card${index === 0 ? ' is-primary' : ''}" data-cause-index="${index}">
+            <div class="root-cause-header">
+              <div class="root-cause-rank">${index + 1}</div>
+              <div class="root-cause-main">
+                <div class="root-cause-title">${escapeHtml(String(candidate.filePath || ""))}</div>
+                ${candidate.relatedSymbol ? `<div class="root-cause-symbol">${escapeHtml(candidate.relatedSymbol)}</div>` : ''}
+                <p class="root-cause-reason">${escapeHtml(String(candidate.reason || "Probable root cause"))}</p>
+              </div>
+              <div class="root-cause-confidence-wrap">
+                <svg class="confidence-gauge" viewBox="0 0 45 45" xmlns="http://www.w3.org/2000/svg">
+                  <circle cx="22.5" cy="22.5" r="19" class="confidence-bg" />
+                  <circle cx="22.5" cy="22.5" r="19" class="confidence-fill" style="stroke-dasharray: ${confidence * 1.194} 119.38;" />
+                  <text x="22.5" y="24" class="confidence-text">${confidence}</text>
+                </svg>
+                ${hasDetails ? `<button class="root-cause-toggle" data-collapsed="true" aria-expanded="false" title="Show details">
+                  <span class="toggle-icon">›</span>
+                </button>` : ''}
+              </div>
             </div>
-            <p>${escapeHtml(String(candidate.reason || "Probable root cause"))}</p>
-            <div class="finding-meta">
-              <span>${escapeHtml((candidate.linkedEvidence || []).join(", ") || "No linked evidence")}</span>
-            </div>
-          </div>
-        </article>
-      `)
+            ${hasDetails ? `
+              <div class="root-cause-details">
+                ${signals.length > 0 ? `
+                  <div class="details-section">
+                    <div class="section-title">Signals</div>
+                    <div class="signal-list">
+                      ${signals.slice(0, 2).map(s => `<span class="signal-badge">${escapeHtml(s)}</span>`).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+                ${evidence.length > 0 ? `
+                  <div class="details-section">
+                    <div class="section-title">Evidence</div>
+                    <div class="evidence-list">
+                      ${evidence.slice(0, 2).map(e => `<div class="evidence-item">${escapeHtml(e)}</div>`).join('')}
+                    </div>
+                  </div>
+                ` : ''}
+              </div>
+            ` : ''}
+          </article>
+        `;
+      })
       .join("");
 
     elements.rootCauseList.innerHTML = renderedRootCauses;
     elements.overviewRootCauseList.innerHTML = renderedRootCauses;
+    
+    // Setup toggle handlers
+    setupRootCauseToggles();
 
     const top = probableRootCauses[0];
     elements.overviewRootCauseSummary.textContent = top
@@ -1611,16 +1870,91 @@
       : "AI inferred causes for the selected checkpoint.";
   }
 
-  function renderRuntimeEvents(runtimeEvents, selectedEntry) {
+  function setupRootCauseToggles() {
+    const toggles = document.querySelectorAll(".root-cause-toggle");
+    toggles.forEach((toggle) => {
+      toggle.addEventListener("click", (e) => {
+        e.preventDefault();
+        const isCollapsed = toggle.getAttribute("data-collapsed") === "true";
+        const card = toggle.closest(".root-cause-card");
+        const details = card.querySelector(".root-cause-details");
+        
+        if (!details) return;
+        
+        if (isCollapsed) {
+          // Expand
+          details.style.display = "block";
+          // Force reflow to ensure scrollHeight is calculated
+          void details.offsetHeight;
+          details.style.maxHeight = (details.scrollHeight + 2) + "px";
+          toggle.setAttribute("data-collapsed", "false");
+          toggle.setAttribute("aria-expanded", "true");
+        } else {
+          // Collapse
+          details.style.maxHeight = "0";
+          toggle.setAttribute("data-collapsed", "true");
+          toggle.setAttribute("aria-expanded", "false");
+          // Hide after transition completes
+          setTimeout(() => {
+            if (toggle.getAttribute("data-collapsed") === "true") {
+              details.style.display = "none";
+            }
+          }, 300);
+        }
+      });
+    });
+  }
+
+  function renderRuntimeEvents(runtimeEvents, selectedEntry, options = {}) {
     if (!Array.isArray(runtimeEvents) || runtimeEvents.length === 0) {
       elements.runtimeEventsList.innerHTML = '<div class="empty-state">No runtime events captured yet. This incident is currently based on static analysis only.</div>';
+      appState.runtimeEventsVisibleCount = 0;
+      appState.runtimeEventsSourceKey = undefined;
+      if (elements.runtimeEventsCount) {
+        elements.runtimeEventsCount.textContent = "0 events";
+      }
+      if (elements.runtimeEventsLoaded) {
+        elements.runtimeEventsLoaded.textContent = "Scroll to load more";
+      }
       renderEmptyRuntimeDetail();
       return;
     }
 
-    elements.runtimeEventsList.innerHTML = runtimeEvents
+    const batchSize = 12;
+    const sourceKey = `${selectedEntry?.checkpointId || "none"}:${runtimeEvents.length}`;
+    if (appState.runtimeEventsSourceKey !== sourceKey) {
+      appState.runtimeEventsSourceKey = sourceKey;
+      appState.runtimeEventsVisibleCount = Math.min(batchSize, runtimeEvents.length);
+    } else {
+      appState.runtimeEventsVisibleCount = Math.max(1, Math.min(appState.runtimeEventsVisibleCount, runtimeEvents.length));
+    }
+
+    if (appState.selectedRuntimeEventId) {
+      const selectedIndex = runtimeEvents.findIndex((event) => event.id === appState.selectedRuntimeEventId);
+      if (selectedIndex >= 0 && selectedIndex + 1 > appState.runtimeEventsVisibleCount) {
+        appState.runtimeEventsVisibleCount = Math.min(runtimeEvents.length, selectedIndex + 1);
+      }
+    }
+
+    const visibleRuntimeEvents = runtimeEvents.slice(0, appState.runtimeEventsVisibleCount);
+
+    const selectedInView = visibleRuntimeEvents.some((event) => event.id === appState.selectedRuntimeEventId);
+    if (!selectedInView && visibleRuntimeEvents.length > 0) {
+      appState.selectedRuntimeEventId = visibleRuntimeEvents[0].id;
+    }
+
+    if (elements.runtimeEventsCount) {
+      elements.runtimeEventsCount.textContent = `${runtimeEvents.length} events`;
+    }
+    if (elements.runtimeEventsLoaded) {
+      elements.runtimeEventsLoaded.textContent = appState.runtimeEventsVisibleCount >= runtimeEvents.length
+        ? `All loaded (${runtimeEvents.length})`
+        : `Loaded ${appState.runtimeEventsVisibleCount} of ${runtimeEvents.length}`;
+    }
+
+    elements.runtimeEventsList.innerHTML = visibleRuntimeEvents
       .map((event) => {
-        const selected = appState.selectedRuntimeEventId ? appState.selectedRuntimeEventId === event.id : runtimeEvents[0]?.id === event.id;
+        const selected = appState.selectedRuntimeEventId ? appState.selectedRuntimeEventId === event.id : visibleRuntimeEvents[0]?.id === event.id;
         const confirmedClass = runtimeConfirmationClass(event.confirmationState, event.runtimeConfirmed);
         const checkpointLabel = event.linkedCheckpointId ? event.linkedCheckpointId : "No checkpoint linked";
         return `
@@ -1638,6 +1972,24 @@
         `;
       })
       .join("");
+
+    const runtimeListEl = elements.runtimeEventsList;
+    runtimeListEl.onscroll = () => {
+      const nearBottom = runtimeListEl.scrollTop + runtimeListEl.clientHeight >= runtimeListEl.scrollHeight - 24;
+      const canLoadMore = appState.runtimeEventsVisibleCount < runtimeEvents.length;
+      if (!nearBottom || !canLoadMore) {
+        return;
+      }
+
+      const prevScrollTop = runtimeListEl.scrollTop;
+      const prevScrollHeight = runtimeListEl.scrollHeight;
+      appState.runtimeEventsVisibleCount = Math.min(runtimeEvents.length, appState.runtimeEventsVisibleCount + batchSize);
+      renderRuntimeEvents(runtimeEvents, selectedEntry, {
+        preserveScroll: true,
+        prevScrollTop,
+        prevScrollHeight
+      });
+    };
 
     elements.runtimeEventsList.querySelectorAll("[data-runtime-event-id]").forEach((button) => {
       button.addEventListener("click", () => {
@@ -1665,38 +2017,51 @@
       appState.selectedRuntimeEventId = selectedEvent.id;
     }
     renderRuntimeEventDetail(selectedEvent);
+
+    if (options.preserveScroll) {
+      const prevTop = Number(options.prevScrollTop || 0);
+      const prevHeight = Number(options.prevScrollHeight || 0);
+      requestAnimationFrame(() => {
+        const growth = elements.runtimeEventsList.scrollHeight - prevHeight;
+        elements.runtimeEventsList.scrollTop = Math.max(0, prevTop + Math.max(0, growth));
+      });
+    }
   }
 
   function renderRuntimeEventDetail(event) {
+    if (!elements.runtimeDetailType || !elements.runtimeDetailStatus || !elements.runtimeDetailMessage || !elements.runtimeDetailTime || !elements.runtimeDetailFile || !elements.runtimeDetailLine || !elements.runtimeDetailCheckpoint) {
+      return;
+    }
+
     if (!event) {
       renderEmptyRuntimeDetail();
       return;
     }
 
+    const statusClass = runtimeConfirmationClass(event.confirmationState, event.runtimeConfirmed);
     elements.runtimeDetailType.textContent = formatRuntimeEventTypeLabel(event.type || event.eventType);
     elements.runtimeDetailStatus.textContent = runtimeConfirmationLabel(event.confirmationState, event.runtimeConfirmed);
+    elements.runtimeDetailStatus.className = `mini-pill ${statusClass}`;
     elements.runtimeDetailMessage.textContent = event.message;
     elements.runtimeDetailTime.textContent = event.timestamp || "-";
     elements.runtimeDetailFile.textContent = event.filePath || "-";
     elements.runtimeDetailLine.textContent = event.line ? `L${event.line}` : "-";
     elements.runtimeDetailCheckpoint.textContent = event.linkedCheckpointId || "-";
-    const evidence = Array.isArray(event.evidence) ? event.evidence : [];
-    const evidenceLines = evidence.slice(0, 6).map((item) => `evidence: ${item}`);
-    const stackLines = Array.isArray(event.stackPreview) && event.stackPreview.length > 0
-      ? event.stackPreview
-      : ["No stack trace captured yet."];
-    elements.runtimeDetailStack.textContent = [...evidenceLines, ...stackLines].join("\n");
   }
 
   function renderEmptyRuntimeDetail() {
+    if (!elements.runtimeDetailType || !elements.runtimeDetailStatus || !elements.runtimeDetailMessage || !elements.runtimeDetailTime || !elements.runtimeDetailFile || !elements.runtimeDetailLine || !elements.runtimeDetailCheckpoint) {
+      return;
+    }
+
     elements.runtimeDetailType.textContent = "No event selected";
     elements.runtimeDetailStatus.textContent = "Waiting";
-    elements.runtimeDetailMessage.textContent = "Select a runtime event to inspect stack details and checkpoint links.";
+    elements.runtimeDetailStatus.className = "mini-pill";
+    elements.runtimeDetailMessage.textContent = "Select a runtime event to inspect details.";
     elements.runtimeDetailTime.textContent = "-";
     elements.runtimeDetailFile.textContent = "-";
     elements.runtimeDetailLine.textContent = "-";
     elements.runtimeDetailCheckpoint.textContent = "-";
-    elements.runtimeDetailStack.textContent = "No runtime stack captured yet.";
   }
 
   function renderUnifiedTimeline(selectedEntry) {
@@ -1726,73 +2091,292 @@
     }
 
     appState.selectedIncidentId = selectedIncident.id;
+    const runtimeStatus = runtimeConfirmationLabel(selectedIncident.runtimeConfirmationState, selectedIncident.runtimeConfirmed);
     elements.incidentDetailSummary.textContent = selectedIncident.summary;
     elements.incidentDetailStatus.textContent = normalizeIncidentStatusLabel(selectedIncident.status);
-    elements.incidentDetailRuntimeConfirmation.textContent = runtimeConfirmationLabel(selectedIncident.runtimeConfirmationState, selectedIncident.runtimeConfirmed);
-    elements.incidentDetailSeverity.textContent = `${entry.state} · ${selectedIncident.statusReason}`;
+    elements.incidentDetailStatus.className = `mini-pill ${incidentStatusClass(selectedIncident.status)}`;
+    elements.incidentDetailRuntimeConfirmation.textContent = runtimeStatus;
+    elements.incidentDetailRuntimeConfirmation.className = `mini-pill ${runtimeConfirmationClass(selectedIncident.runtimeConfirmationState, selectedIncident.runtimeConfirmed)}`;
     elements.incidentDetailFile.textContent = selectedIncident.surfacedFile || "-";
-    elements.incidentDetailCheckpoint.textContent = selectedIncident.linkedCheckpointId || entry.checkpointId || "-";
     elements.incidentDetailRuntimeCount.textContent = String(selectedIncident.evidenceCount || 0);
-    elements.incidentDetailLastRuntime.textContent = selectedIncident.lastRuntimeEventAt || "-";
     elements.incidentDetailReason.textContent = selectedIncident.statusReason || selectedIncident.summary;
-    elements.incidentDetailFindings.innerHTML = renderLinkedChips(selectedIncident.linkedFindings, selectedIncident.linkedFindings.length ? "finding" : "none");
-    elements.incidentDetailCauses.innerHTML = renderLinkedChips(selectedIncident.probableCauses, selectedIncident.probableCauses.length ? "cause" : "none");
-    elements.incidentDetailRuntimeEvents.innerHTML = renderLinkedChips(selectedIncident.linkedRuntimeEvents, selectedIncident.linkedRuntimeEvents.length ? "runtime" : "none");
+    persistUiState();
   }
 
   function renderEmptyIncidentDetail() {
     elements.incidentDetailSummary.textContent = "No incident selected";
     elements.incidentDetailStatus.textContent = "Waiting";
+    elements.incidentDetailStatus.className = "mini-pill";
     elements.incidentDetailRuntimeConfirmation.textContent = "Suspected";
-    elements.incidentDetailSeverity.textContent = "No incident selected";
+    elements.incidentDetailRuntimeConfirmation.className = "mini-pill";
     elements.incidentDetailFile.textContent = "-";
-    elements.incidentDetailCheckpoint.textContent = "-";
     elements.incidentDetailRuntimeCount.textContent = "0";
-    elements.incidentDetailLastRuntime.textContent = "-";
     elements.incidentDetailReason.textContent = "Select an incident to inspect linked findings, runtime evidence, and file context.";
-    elements.incidentDetailFindings.innerHTML = '<div class="empty-state">No findings linked yet.</div>';
-    elements.incidentDetailCauses.innerHTML = '<div class="empty-state">No root-cause candidates linked yet.</div>';
-    elements.incidentDetailRuntimeEvents.innerHTML = '<div class="empty-state">No runtime evidence linked yet.</div>';
   }
 
-  function renderIncidentList(incidents, selectedEntry) {
+  function isTypingTarget(target) {
+    if (!target) {
+      return false;
+    }
+
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || Boolean(target.isContentEditable);
+  }
+
+  function getFilteredSortedIncidents(incidents) {
     if (!Array.isArray(incidents) || incidents.length === 0) {
+      return [];
+    }
+
+    const query = String(appState.incidentSearchQuery || "").trim().toLowerCase();
+    const statusFilter = String(appState.incidentStatusFilter || "all").toLowerCase();
+    const runtimeOnly = Boolean(appState.incidentRuntimeOnly);
+
+    return incidents
+      .filter((incident) => {
+        const statusLabel = normalizeIncidentStatusLabel(incident.status).toLowerCase();
+        if (statusFilter !== "all" && statusLabel !== statusFilter) {
+          return false;
+        }
+
+        if (runtimeOnly && runtimeConfirmationLabel(incident.runtimeConfirmationState, incident.runtimeConfirmed) !== "Runtime Confirmed") {
+          return false;
+        }
+
+        if (!query) {
+          return true;
+        }
+
+        const summary = String(incident.summary || "").toLowerCase();
+        const file = String(incident.surfacedFile || "").toLowerCase();
+        return summary.includes(query) || file.includes(query);
+      })
+      .sort(compareIncidentsForQueue);
+  }
+
+  function refreshIncidentWorkspace() {
+    const selected = getSelectedEntry();
+    if (!selected) {
+      return;
+    }
+
+    renderIncidentList(selected.incidents, selected);
+  }
+
+  function selectIncidentByDelta(delta) {
+    const selectedEntry = getSelectedEntry();
+    if (!selectedEntry || !Array.isArray(selectedEntry.incidents) || selectedEntry.incidents.length === 0) {
+      return;
+    }
+
+    const filtered = getFilteredSortedIncidents(selectedEntry.incidents);
+    if (!filtered.length) {
+      return;
+    }
+
+    const currentIndex = filtered.findIndex((incident) => incident.id === appState.selectedIncidentId);
+    const baseIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = Math.max(0, Math.min(filtered.length - 1, baseIndex + delta));
+    const nextIncident = filtered[nextIndex];
+    if (!nextIncident) {
+      return;
+    }
+
+    appState.selectedIncidentId = nextIncident.id;
+    renderIncidentList(selectedEntry.incidents, selectedEntry);
+    renderIncidentDetail(selectedEntry, nextIncident);
+    persistUiState();
+  }
+
+  function persistUiState() {
+    if (!vscode || typeof vscode.setState !== "function") {
+      return;
+    }
+
+    vscode.setState({
+      activePane: appState.activePane,
+      selectedIncidentId: appState.selectedIncidentId,
+      selectedCheckpointIndex: appState.selectedIndex,
+      incidentSearchQuery: appState.incidentSearchQuery,
+      incidentStatusFilter: appState.incidentStatusFilter,
+      incidentRuntimeOnly: appState.incidentRuntimeOnly,
+      snippetViewMode: appState.snippetViewMode,
+      activeSnippetTab: appState.activeSnippetTab,
+    });
+  }
+
+  function restorePersistedUiState() {
+    if (!vscode || typeof vscode.getState !== "function") {
+      return;
+    }
+
+    const persisted = vscode.getState();
+    if (!persisted || typeof persisted !== "object") {
+      return;
+    }
+
+    if (persisted.activePane) {
+      appState.activePane = String(persisted.activePane);
+    }
+    if (persisted.selectedIncidentId) {
+      appState.selectedIncidentId = String(persisted.selectedIncidentId);
+    }
+    if (Number.isFinite(Number(persisted.selectedCheckpointIndex))) {
+      appState.selectedIndex = Math.max(0, Number(persisted.selectedCheckpointIndex));
+    }
+    if (typeof persisted.incidentSearchQuery === "string") {
+      appState.incidentSearchQuery = persisted.incidentSearchQuery;
+    }
+    if (typeof persisted.incidentStatusFilter === "string") {
+      appState.incidentStatusFilter = persisted.incidentStatusFilter;
+    }
+    if (typeof persisted.incidentRuntimeOnly === "boolean") {
+      appState.incidentRuntimeOnly = persisted.incidentRuntimeOnly;
+    }
+    if (typeof persisted.snippetViewMode === "string") {
+      appState.snippetViewMode = persisted.snippetViewMode;
+    }
+    if (typeof persisted.activeSnippetTab === "string") {
+      appState.activeSnippetTab = persisted.activeSnippetTab;
+    }
+
+    if (elements.incidentSearchInput) {
+      elements.incidentSearchInput.value = appState.incidentSearchQuery;
+    }
+    if (elements.incidentStatusFilter) {
+      elements.incidentStatusFilter.value = appState.incidentStatusFilter;
+    }
+    if (elements.incidentRuntimeOnly) {
+      elements.incidentRuntimeOnly.checked = Boolean(appState.incidentRuntimeOnly);
+    }
+  }
+
+  function renderIncidentList(incidents, selectedEntry, options = {}) {
+    if (!Array.isArray(incidents) || incidents.length === 0) {
+      appState.incidentsVisibleCount = 0;
+      appState.incidentsSourceKey = undefined;
+      if (elements.incidentOverview) {
+        elements.incidentOverview.textContent = "No incidents available yet.";
+      }
       elements.incidentList.innerHTML = '<div class="empty-state">No incidents yet.</div>';
       renderEmptyIncidentDetail();
       return;
     }
 
-    if (!appState.selectedIncidentId || !incidents.some((incident) => incident.id === appState.selectedIncidentId)) {
-      appState.selectedIncidentId = incidents[0].id;
+    const batchSize = 10;
+    const filteredIncidents = getFilteredSortedIncidents(incidents);
+    const sourceKey = `${selectedEntry?.checkpointId || "none"}:${incidents.length}:${filteredIncidents.length}:${appState.incidentSearchQuery}:${appState.incidentStatusFilter}:${appState.incidentRuntimeOnly ? "runtime" : "all"}`;
+    if (appState.incidentsSourceKey !== sourceKey) {
+      appState.incidentsSourceKey = sourceKey;
+      appState.incidentsVisibleCount = Math.min(batchSize, filteredIncidents.length);
+    } else {
+      appState.incidentsVisibleCount = Math.max(1, Math.min(appState.incidentsVisibleCount, filteredIncidents.length || 1));
     }
 
-    elements.incidentList.innerHTML = incidents
-      .map((incident, index) => {
-        const trail = Array.isArray(incident.timelineTrail)
-          ? incident.timelineTrail.map((point) => `<span class="trail-chip ${stateClass(point.state)}">${escapeHtml(String(point.label || point.state))}</span>`).join("")
-          : "";
-        const isSelected = appState.selectedIncidentId === incident.id;
+    if (!filteredIncidents.length) {
+      if (elements.incidentOverview) {
+        elements.incidentOverview.textContent = `0 matches • filtered from ${incidents.length} incidents`;
+      }
+      elements.incidentList.innerHTML = '<div class="empty-state">No incidents match the current filter.</div>';
+      renderEmptyIncidentDetail();
+      return;
+    }
+
+    if (!appState.selectedIncidentId || !filteredIncidents.some((incident) => incident.id === appState.selectedIncidentId)) {
+      appState.selectedIncidentId = filteredIncidents[0].id;
+    }
+
+    if (appState.selectedIncidentId) {
+      const selectedIndex = filteredIncidents.findIndex((incident) => incident.id === appState.selectedIncidentId);
+      if (selectedIndex >= 0 && selectedIndex + 1 > appState.incidentsVisibleCount) {
+        appState.incidentsVisibleCount = Math.min(filteredIncidents.length, selectedIndex + 1);
+      }
+    }
+
+    const visibleIncidents = filteredIncidents.slice(0, appState.incidentsVisibleCount);
+
+    if (elements.incidentOverview) {
+      const loadedText = appState.incidentsVisibleCount >= filteredIncidents.length
+        ? `all loaded (${filteredIncidents.length})`
+        : `loaded ${appState.incidentsVisibleCount} of ${filteredIncidents.length}`;
+      elements.incidentOverview.textContent = `${filteredIncidents.length} match${filteredIncidents.length === 1 ? "" : "es"} • ${loadedText} • total ${incidents.length}`;
+    }
+    const grouped = {
+      Open: [],
+      Mitigated: [],
+      Resolved: []
+    };
+    visibleIncidents.forEach((incident) => {
+      const statusLabel = normalizeIncidentStatusLabel(incident.status);
+      if (statusLabel === "Mitigated") {
+        grouped.Mitigated.push(incident);
+        return;
+      }
+      if (statusLabel === "Resolved") {
+        grouped.Resolved.push(incident);
+        return;
+      }
+      grouped.Open.push(incident);
+    });
+
+    elements.incidentList.innerHTML = Object.entries(grouped)
+      .map(([status, items]) => {
+        if (!items.length) {
+          return "";
+        }
+
+        const cards = items.map((incident) => {
+          const trail = Array.isArray(incident.timelineTrail)
+            ? incident.timelineTrail.map((point) => `<span class="trail-chip ${stateClass(point.state)}">${escapeHtml(String(point.label || point.state))}</span>`).join("")
+            : "";
+          const isSelected = appState.selectedIncidentId === incident.id;
+          return `
+            <button class="incident-item ${isSelected ? "selected" : ""}" type="button" data-incident-id="${escapeHtml(incident.id)}">
+              <div class="finding-topline">
+                <strong>${escapeHtml(String(incident.summary || "Incident"))}</strong>
+                <span class="mini-pill ${incidentStatusClass(incident.status)}">${escapeHtml(normalizeIncidentStatusLabel(incident.status))}</span>
+              </div>
+              <p>${escapeHtml(String(incident.surfacedFile || ""))}</p>
+              <div class="trail-row">${trail}</div>
+              <div class="finding-meta">
+                <span>${escapeHtml(runtimeConfirmationLabel(incident.runtimeConfirmationState, incident.runtimeConfirmed))}</span>
+                <span>${escapeHtml(String(incident.evidenceCount || 0))} evidence items</span>
+              </div>
+            </button>
+          `;
+        }).join("");
+
         return `
-          <button class="incident-item ${isSelected ? "selected" : ""}" type="button" data-incident-index="${index}">
-            <div class="finding-topline">
-              <strong>${escapeHtml(String(incident.summary || "Incident"))}</strong>
-              <span class="mini-pill ${incidentStatusClass(incident.status)}">${escapeHtml(normalizeIncidentStatusLabel(incident.status))}</span>
-            </div>
-            <p>${escapeHtml(String(incident.surfacedFile || ""))}</p>
-            <div class="trail-row">${trail}</div>
-            <div class="finding-meta">
-              <span>${escapeHtml(runtimeConfirmationLabel(incident.runtimeConfirmationState, incident.runtimeConfirmed))}</span>
-              <span>${escapeHtml(String(incident.evidenceCount || 0))} evidence items</span>
-            </div>
-          </button>
+          <section class="incident-group">
+            <div class="incident-group-header">${escapeHtml(status)} <span>${items.length}</span></div>
+            <div class="incident-group-list">${cards}</div>
+          </section>
         `;
       })
       .join("");
 
-    elements.incidentList.querySelectorAll("[data-incident-index]").forEach((button) => {
+    const incidentListEl = elements.incidentList;
+    incidentListEl.onscroll = () => {
+      const nearBottom = incidentListEl.scrollTop + incidentListEl.clientHeight >= incidentListEl.scrollHeight - 24;
+      const canLoadMore = appState.incidentsVisibleCount < filteredIncidents.length;
+      if (!nearBottom || !canLoadMore) {
+        return;
+      }
+
+      const prevScrollTop = incidentListEl.scrollTop;
+      const prevScrollHeight = incidentListEl.scrollHeight;
+      appState.incidentsVisibleCount = Math.min(filteredIncidents.length, appState.incidentsVisibleCount + batchSize);
+      renderIncidentList(incidents, selectedEntry, {
+        preserveScroll: true,
+        prevScrollTop,
+        prevScrollHeight,
+      });
+    };
+
+    elements.incidentList.querySelectorAll("[data-incident-id]").forEach((button) => {
       button.addEventListener("click", () => {
-        const index = Number(button.getAttribute("data-incident-index"));
-        const incident = incidents[index];
+        const incidentId = button.getAttribute("data-incident-id");
+        const incident = incidents.find((item) => item.id === incidentId);
         if (!incident) {
           return;
         }
@@ -1815,8 +2399,18 @@
             renderRuntimeEventDetail(runtimeEvent);
           }
         }
+        persistUiState();
       });
     });
+
+    if (options.preserveScroll) {
+      const prevTop = Number(options.prevScrollTop || 0);
+      const prevHeight = Number(options.prevScrollHeight || 0);
+      requestAnimationFrame(() => {
+        const growth = elements.incidentList.scrollHeight - prevHeight;
+        elements.incidentList.scrollTop = Math.max(0, prevTop + Math.max(0, growth));
+      });
+    }
 
     renderIncidentDetail(selectedEntry, getSelectedIncident(selectedEntry));
   }
@@ -1837,12 +2431,62 @@
     return entry.incidents.find((incident) => Array.isArray(incident.linkedRuntimeEvents) && incident.linkedRuntimeEvents.includes(runtimeEventId));
   }
 
-  function renderLinkedChips(values) {
-    if (!Array.isArray(values) || values.length === 0) {
-      return '<div class="empty-state">None</div>';
+  function renderLinkedChipSection(container, values, sectionKey, incidentId, options = {}) {
+    if (!container) {
+      return;
     }
 
-    return values.map((value) => `<span class="mini-pill">${escapeHtml(String(value))}</span>`).join("");
+    if (!Array.isArray(values) || values.length === 0) {
+      appState.incidentLinkedVisibleCount[sectionKey] = 0;
+      appState.incidentLinkedSourceKeys[sectionKey] = undefined;
+      container.innerHTML = '<div class="empty-state">None</div>';
+      return;
+    }
+
+    const batchSize = 18;
+    const sourceKey = `${incidentId || "none"}:${sectionKey}:${values.length}`;
+    if (appState.incidentLinkedSourceKeys[sectionKey] !== sourceKey) {
+      appState.incidentLinkedSourceKeys[sectionKey] = sourceKey;
+      appState.incidentLinkedVisibleCount[sectionKey] = Math.min(batchSize, values.length);
+    } else {
+      appState.incidentLinkedVisibleCount[sectionKey] = Math.max(
+        1,
+        Math.min(appState.incidentLinkedVisibleCount[sectionKey] || 1, values.length)
+      );
+    }
+
+    const visibleCount = appState.incidentLinkedVisibleCount[sectionKey];
+    const visibleValues = values.slice(0, visibleCount);
+    const statusText = visibleCount >= values.length
+      ? `All loaded (${values.length})`
+      : `Loaded ${visibleCount} of ${values.length}`;
+
+    container.innerHTML = `${visibleValues.map((value) => `<span class="mini-pill">${escapeHtml(String(value))}</span>`).join("")}<div class="linked-chip-status">${escapeHtml(statusText)}</div>`;
+    container.onscroll = () => {
+      const nearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 20;
+      const canLoadMore = appState.incidentLinkedVisibleCount[sectionKey] < values.length;
+      if (!nearBottom || !canLoadMore) {
+        return;
+      }
+
+      const prevScrollTop = container.scrollTop;
+      const prevScrollHeight = container.scrollHeight;
+      appState.incidentLinkedVisibleCount[sectionKey] = Math.min(values.length, appState.incidentLinkedVisibleCount[sectionKey] + batchSize);
+      renderLinkedChipSection(container, values, sectionKey, incidentId, {
+        preserveScroll: true,
+        prevScrollTop,
+        prevScrollHeight,
+      });
+    };
+
+    if (options.preserveScroll) {
+      const prevTop = Number(options.prevScrollTop || 0);
+      const prevHeight = Number(options.prevScrollHeight || 0);
+      requestAnimationFrame(() => {
+        const growth = container.scrollHeight - prevHeight;
+        container.scrollTop = Math.max(0, prevTop + Math.max(0, growth));
+      });
+    }
   }
 
   function runtimeConfirmationLabel(state, runtimeConfirmed) {
@@ -1886,6 +2530,46 @@
     }
 
     return "finding-error";
+  }
+
+  function incidentStatusRank(status) {
+    const label = normalizeIncidentStatusLabel(status);
+    if (label === "Open") {
+      return 0;
+    }
+    if (label === "Mitigated") {
+      return 1;
+    }
+    return 2;
+  }
+
+  function incidentPriorityScore(incident) {
+    const runtimeConfirmed = runtimeConfirmationLabel(incident.runtimeConfirmationState, incident.runtimeConfirmed) === "Runtime Confirmed";
+    const evidenceCount = Number(incident.evidenceCount || 0);
+    const runtimeSignals = Array.isArray(incident.linkedRuntimeEvents) ? incident.linkedRuntimeEvents.length : 0;
+    const findings = Array.isArray(incident.linkedFindings) ? incident.linkedFindings.length : 0;
+    const freshAt = incident.lastRuntimeEventAt ? Date.parse(String(incident.lastRuntimeEventAt)) : 0;
+    const recencyBoost = Number.isFinite(freshAt) ? Math.max(0, Math.floor((freshAt % 1000000) / 1000)) : 0;
+
+    return (runtimeConfirmed ? 100000 : 0)
+      + (evidenceCount * 100)
+      + (runtimeSignals * 25)
+      + (findings * 12)
+      + recencyBoost;
+  }
+
+  function compareIncidentsForQueue(a, b) {
+    const rankDelta = incidentStatusRank(a.status) - incidentStatusRank(b.status);
+    if (rankDelta !== 0) {
+      return rankDelta;
+    }
+
+    const scoreDelta = incidentPriorityScore(b) - incidentPriorityScore(a);
+    if (scoreDelta !== 0) {
+      return scoreDelta;
+    }
+
+    return String(a.summary || "").localeCompare(String(b.summary || ""));
   }
 
   function runtimeEventTypeClass(eventType) {
@@ -1970,16 +2654,73 @@
   function updateCode(entry) {
     const codePane = normalizeCodePane(appState.codePane, entry);
     const focusedLine = getPreferredFocusLine(codePane, entry);
-    const beforeSnippet = selectSnippet(codePane.beforeSnippet, entry.codePreview.before, focusedLine, entry.codePreview.startLine || 1);
-    const afterSnippet = selectSnippet(codePane.afterSnippet, entry.codePreview.after, focusedLine, entry.codePreview.startLine || 1);
+    const entryPreviewStart = Number(entry?.codePreview?.startLine || 1);
+    const entryPreviewFocus = Number(entry?.codePreview?.focusLine || 1);
+    const hasEntryBefore = Array.isArray(entry?.codePreview?.before) && entry.codePreview.before.length > 0;
+    const hasEntryAfter = Array.isArray(entry?.codePreview?.after) && entry.codePreview.after.length > 0;
+
+    // Prefer the selected checkpoint preview. A live codePane payload may only
+    // represent the latest analysis, which can make older checkpoints look identical.
+    const sourceBeforeSnippet = hasEntryBefore
+      ? normalizeSnippet(undefined, entry.codePreview.before, entryPreviewStart, entryPreviewFocus)
+      : codePane.beforeSnippet;
+    const sourceAfterSnippet = hasEntryAfter
+      ? normalizeSnippet(undefined, entry.codePreview.after, entryPreviewStart, entryPreviewFocus)
+      : codePane.afterSnippet;
+
+    const beforeSnippet = selectSnippet(sourceBeforeSnippet, entry.codePreview.before, focusedLine, entry.codePreview.startLine || 1);
+    const afterSnippet = selectSnippet(sourceAfterSnippet, entry.codePreview.after, focusedLine, entry.codePreview.startLine || 1);
 
     elements.beforeCodeWindow.innerHTML = renderSnippetLines(beforeSnippet);
     elements.afterCodeWindow.innerHTML = renderSnippetLines(afterSnippet);
     elements.beforeFocusLine.textContent = `Focus L${focusedLine}`;
     elements.afterFocusLine.textContent = `Focus L${focusedLine}`;
+    updateSnippetPresentation();
 
     renderCodeNavigation(codePane, entry, focusedLine);
-    renderCodeFlow(codePane.flow);
+    renderCodeFlow(codePane.flow, codePane.summary || codePane.title || "");
+  }
+
+  function updateSnippetPresentation() {
+    const isSplit = appState.snippetViewMode === "split";
+    const showBefore = isSplit || appState.activeSnippetTab === "before";
+    const showAfter = isSplit || appState.activeSnippetTab === "after";
+
+    if (elements.beforeSnippetPanel) {
+      elements.beforeSnippetPanel.classList.toggle("is-hidden", !showBefore);
+    }
+
+    if (elements.afterSnippetPanel) {
+      elements.afterSnippetPanel.classList.toggle("is-hidden", !showAfter);
+    }
+
+    if (elements.snippetLayout) {
+      elements.snippetLayout.classList.toggle("split-mode", isSplit);
+    }
+
+    if (elements.snippetTabBefore) {
+      const active = !isSplit && appState.activeSnippetTab === "before";
+      elements.snippetTabBefore.classList.toggle("active", active);
+      elements.snippetTabBefore.setAttribute("aria-selected", active ? "true" : "false");
+    }
+
+    if (elements.snippetTabAfter) {
+      const active = !isSplit && appState.activeSnippetTab === "after";
+      elements.snippetTabAfter.classList.toggle("active", active);
+      elements.snippetTabAfter.setAttribute("aria-selected", active ? "true" : "false");
+    }
+
+    if (elements.snippetModeTab) {
+      const active = !isSplit;
+      elements.snippetModeTab.classList.toggle("active", active);
+      elements.snippetModeTab.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+
+    if (elements.snippetModeSplit) {
+      const active = isSplit;
+      elements.snippetModeSplit.classList.toggle("active", active);
+      elements.snippetModeSplit.setAttribute("aria-pressed", active ? "true" : "false");
+    }
   }
 
   function normalizeCodePane(rawCodePane, entry) {
@@ -2167,54 +2908,106 @@
   }
 
   function renderCodeNavigation(codePane, entry, focusedLine) {
-    const buttons = [];
-
-    codePane.findingLocations.slice(0, 3).forEach((finding) => {
-      const lineLabel = finding.line ? `L${finding.line}` : "file";
-      buttons.push(`
-        <button class="code-nav-btn" type="button" data-nav-type="finding" data-id="${escapeHtml(finding.id)}" data-file="${escapeHtml(finding.filePath)}" data-line="${finding.line || ""}">
-          Jump to finding: ${escapeHtml(lineLabel)}
-        </button>
-      `);
-    });
+    const jumpActions = [];
+    const fileActions = [];
+    const seenLocations = new Set();
+    const seenFiles = new Set();
 
     codePane.runtimeLocations.slice(0, 3).forEach((runtimeEvent) => {
-      const lineLabel = runtimeEvent.line ? `L${runtimeEvent.line}` : "file";
-      buttons.push(`
-        <button class="code-nav-btn" type="button" data-nav-type="runtime" data-id="${escapeHtml(runtimeEvent.id)}" data-file="${escapeHtml(runtimeEvent.filePath)}" data-line="${runtimeEvent.line || ""}" data-column="${runtimeEvent.column || ""}">
-          Jump to runtime event: ${escapeHtml(lineLabel)}
-        </button>
-      `);
+      const filePath = runtimeEvent.filePath || codePane.currentFile || entry.filePath || "";
+      const key = `${filePath}|${runtimeEvent.line || ""}`;
+      if (seenLocations.has(key)) {
+        return;
+      }
+      seenLocations.add(key);
+
+      const lineLabel = runtimeEvent.line ? `L${runtimeEvent.line}` : "File";
+      jumpActions.push({
+        navType: "runtime",
+        id: runtimeEvent.id,
+        filePath,
+        line: runtimeEvent.line,
+        column: runtimeEvent.column,
+        tone: "runtime",
+        kind: "Runtime",
+        target: lineLabel,
+        meta: ""
+      });
     });
 
-    codePane.rootCauseFiles.slice(0, 3).forEach((rootFile) => {
-      buttons.push(`
-        <button class="code-nav-btn" type="button" data-nav-type="root" data-file="${escapeHtml(rootFile)}">
-          Open root-cause file: ${escapeHtml(trimPathLabel(rootFile))}
-        </button>
-      `);
+    codePane.findingLocations.slice(0, 3).forEach((finding) => {
+      const filePath = finding.filePath || codePane.currentFile || entry.filePath || "";
+      const key = `${filePath}|${finding.line || ""}`;
+      if (seenLocations.has(key)) {
+        return;
+      }
+      seenLocations.add(key);
+
+      const lineLabel = finding.line ? `L${finding.line}` : "File";
+      jumpActions.push({
+        navType: "finding",
+        id: finding.id,
+        filePath,
+        line: finding.line,
+        tone: "finding",
+        kind: "Finding",
+        target: lineLabel,
+        meta: ""
+      });
     });
 
-    codePane.relatedFiles.slice(0, 2).forEach((relatedFile) => {
-      buttons.push(`
-        <button class="code-nav-btn" type="button" data-nav-type="related" data-file="${escapeHtml(relatedFile)}">
-          Open related file: ${escapeHtml(trimPathLabel(relatedFile))}
-        </button>
-      `);
+    const fileCandidates = [
+      ...codePane.rootCauseFiles.slice(0, 2).map((filePath) => ({ navType: "root", filePath, tone: "root", kind: "Root" })),
+      ...codePane.impactedFiles.slice(0, 2).map((filePath) => ({ navType: "impacted", filePath, tone: "impacted", kind: "Impacted" })),
+      ...codePane.relatedFiles.slice(0, 2).map((filePath) => ({ navType: "related", filePath, tone: "related", kind: "Related" }))
+    ];
+
+    fileCandidates.forEach((action) => {
+      const filePath = action.filePath || "";
+      if (!filePath || seenFiles.has(filePath)) {
+        return;
+      }
+      seenFiles.add(filePath);
+      fileActions.push({
+        ...action,
+        target: trimPathLabel(filePath),
+        meta: ""
+      });
     });
 
-    codePane.impactedFiles.slice(0, 2).forEach((impactedFile) => {
-      buttons.push(`
-        <button class="code-nav-btn" type="button" data-nav-type="impacted" data-file="${escapeHtml(impactedFile)}">
-          Open impacted file: ${escapeHtml(trimPathLabel(impactedFile))}
-        </button>
-      `);
-    });
-
-    if (buttons.length === 0) {
+    const allActions = [...jumpActions, ...fileActions];
+    if (allActions.length === 0) {
       elements.codeNavActions.innerHTML = '<div class="empty-state">No navigation targets available for this checkpoint.</div>';
     } else {
-      elements.codeNavActions.innerHTML = buttons.join("");
+      const renderAction = (action) => `
+        <button class="code-nav-btn" type="button" data-nav-type="${escapeHtml(action.navType)}" data-id="${escapeHtml(action.id || "")}" data-file="${escapeHtml(action.filePath || "")}" data-line="${escapeHtml(String(action.line || ""))}" data-column="${escapeHtml(String(action.column || ""))}" data-tone="${escapeHtml(action.tone || "neutral")}">
+          <span class="code-nav-pill code-nav-pill-${escapeHtml(action.tone || "neutral")}">${escapeHtml(action.kind || "Open")}</span>
+          <span class="code-nav-target">${escapeHtml(action.target || "Target")}</span>
+          ${action.meta ? `<span class="code-nav-meta">${escapeHtml(action.meta)}</span>` : ""}
+        </button>
+      `;
+
+      const jumpGroup = jumpActions.length > 0
+        ? `
+          <section class="code-nav-group">
+            <div class="code-nav-chip-grid">
+              ${jumpActions.map(renderAction).join("")}
+            </div>
+          </section>
+        `
+        : "";
+
+      const fileGroup = fileActions.length > 0
+        ? `
+          <section class="code-nav-group">
+            <div class="code-nav-chip-grid">
+              ${fileActions.map(renderAction).join("")}
+            </div>
+          </section>
+        `
+        : "";
+
+      elements.codeNavActions.innerHTML = `${jumpGroup}${fileGroup}`;
     }
 
     elements.codeNavActions.querySelectorAll("[data-nav-type]").forEach((button) => {
@@ -2294,7 +3087,7 @@
     });
   }
 
-  function renderCodeFlow(flow) {
+  function renderCodeFlow(flow, summaryText = "") {
     if (!flow || !Array.isArray(flow.nodes) || flow.nodes.length === 0) {
       elements.codeFlowSummary.textContent = "No inferred flow available for this checkpoint.";
       elements.codeFlowNodes.innerHTML = '<div class="empty-state">No dependency path inferred.</div>';
@@ -2303,31 +3096,234 @@
 
     elements.codeFlowSummary.textContent = flow.summary || "Inferred from imports, impacted files, and naming heuristics.";
 
-    const nodeById = new Map(flow.nodes.map((node) => [node.id, node]));
-    const renderedEdges = Array.isArray(flow.edges) ? flow.edges : [];
+    const edges = Array.isArray(flow.edges) ? flow.edges : [];
+    const isSoloNode = flow.nodes.length === 1 && edges.length === 0;
+    
+    // Find the "current" node (usually first or marked as current)
+    const currentNode = flow.nodes.find(n => n.isCurrent) || flow.nodes[0];
+    const currentIndex = flow.nodes.indexOf(currentNode);
+    
+    // Calculate positions using radial layout
+    const positions = calculateRadialPositions(flow.nodes, currentIndex);
+    
+    // Render SVG flow graph
+    renderFlowGraph(flow.nodes, edges, positions, currentIndex, summaryText, isSoloNode);
+  }
 
-    elements.codeFlowNodes.innerHTML = flow.nodes
-      .map((node) => {
-        const outgoing = renderedEdges.filter((edge) => edge.from === node.id).map((edge) => {
-          const target = nodeById.get(edge.to);
-          if (!target) {
-            return "";
-          }
-          const label = edge.label ? `${edge.label} -> ` : "-> ";
-          return `<span class="mini-pill">${escapeHtml(label + target.role)}</span>`;
-        }).join("");
-        return `
-          <article class="flow-node-card flow-${escapeHtml(String(node.kind || "related"))}">
-            <div class="finding-topline">
-              <strong>${escapeHtml(node.role)}</strong>
-              <span class="mini-pill">${escapeHtml(String(node.kind || "related"))}</span>
-            </div>
-            <p>${escapeHtml(trimPathLabel(node.label))}</p>
-            <div class="finding-meta">${outgoing || '<span class="mini-pill">leaf</span>'}</div>
+  function calculateRadialPositions(nodes, currentIndex) {
+    const positions = new Map();
+    const centerX = 400;
+    const centerY = 200;
+    const currentRadius = 60;
+    const otherRadius = 140;
+    
+    // Current node at center
+    positions.set(nodes[currentIndex].id, { x: centerX, y: centerY, isCurrent: true });
+    
+    // Other nodes arranged in circle
+    const otherNodes = nodes.filter((_, i) => i !== currentIndex);
+    const angleStep = (2 * Math.PI) / Math.max(1, otherNodes.length);
+    
+    otherNodes.forEach((node, i) => {
+      const angle = angleStep * i;
+      const x = centerX + Math.cos(angle) * otherRadius;
+      const y = centerY + Math.sin(angle) * otherRadius;
+      positions.set(node.id, { x, y, isCurrent: false });
+    });
+    
+    return positions;
+  }
+
+  function renderFlowGraph(nodes, edges, positions, currentIndex, summaryText, isSoloNode) {
+    const svg = document.getElementById("flow-graph-svg");
+    const edgesGroup = document.getElementById("flow-edges");
+    const nodesGroup = document.getElementById("flow-svg-nodes");
+    const heroHost = elements.flowHeroHost;
+    const laneHost = elements.flowLaneHost;
+    
+    if (heroHost) {
+      heroHost.innerHTML = "";
+      heroHost.classList.toggle("is-visible", isSoloNode);
+    }
+
+    if (laneHost) {
+      laneHost.innerHTML = "";
+      laneHost.classList.toggle("is-visible", !isSoloNode);
+    }
+
+    if (svg) {
+      svg.classList.add("is-hidden");
+    }
+
+    if (isSoloNode) {
+      const currentNode = nodes[currentIndex];
+      if (heroHost) {
+        heroHost.innerHTML = `
+          <article class="flow-hero-card-html">
+            <div class="flow-hero-badge">Current</div>
+            <div class="flow-hero-file">${escapeHtml(trimPathLabel(currentNode.label))}</div>
+            <div class="flow-hero-role-html">${escapeHtml(currentNode.role)}</div>
+            <div class="flow-hero-kind-html">${escapeHtml(String(currentNode.kind || "current"))}</div>
+            <div class="flow-hero-note-html">${escapeHtml(summaryText || "Single file inferred. No dependency edges found.")}</div>
           </article>
         `;
-      })
-      .join("");
+      }
+      return;
+    }
+
+    if (laneHost) {
+      const edgesByFrom = new Map();
+      edges.forEach((edge) => {
+        if (!edgesByFrom.has(edge.from)) {
+          edgesByFrom.set(edge.from, []);
+        }
+        edgesByFrom.get(edge.from).push(edge);
+      });
+
+      laneHost.innerHTML = `
+        <div class="flow-lane-meta">
+          <span class="flow-lane-count">${nodes.length} modules</span>
+          <span class="flow-lane-note">${escapeHtml(summaryText || "Inferred dependency path")}</span>
+        </div>
+        <div class="flow-lane-list">
+          ${nodes.map((node, index) => {
+            const connected = edgesByFrom.get(node.id) || [];
+            const edgePills = connected.slice(0, 2).map((edge) => {
+              const target = nodes.find((candidate) => candidate.id === edge.to);
+              const targetLabel = target ? target.role : "module";
+              return `<span class="flow-lane-chip">${escapeHtml(edge.label || "→")} ${escapeHtml(targetLabel)}</span>`;
+            }).join("");
+            const extraCount = connected.length > 2 ? `<span class="flow-lane-chip flow-lane-chip-more">+${connected.length - 2} more</span>` : "";
+            return `
+              <article class="flow-lane-card${node.kind === "current" ? " is-current" : ""}" data-node-id="${escapeHtml(node.id)}">
+                <div class="flow-lane-index">${index + 1}</div>
+                <div class="flow-lane-content">
+                  <div class="flow-lane-topline">
+                    <strong>${escapeHtml(node.role)}</strong>
+                    <span class="mini-pill">${escapeHtml(node.kind || "related")}</span>
+                  </div>
+                  <div class="flow-lane-path">${escapeHtml(trimPathLabel(node.label))}</div>
+                  <div class="flow-lane-chips">${edgePills}${extraCount}</div>
+                </div>
+              </article>
+            `;
+          }).join("")}
+        </div>
+      `;
+    }
+
+    edgesGroup.innerHTML = "";
+    nodesGroup.innerHTML = "";
+    
+    // Render edges first (so they appear behind nodes)
+    edges.forEach((edge, idx) => {
+      const fromPos = positions.get(edge.from);
+      const toPos = positions.get(edge.to);
+      if (!fromPos || !toPos) return;
+      
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      const d = `M ${fromPos.x} ${fromPos.y} L ${toPos.x} ${toPos.y}`;
+      path.setAttribute("d", d);
+      path.setAttribute("class", `flow-edge flow-edge-${idx}`);
+      path.setAttribute("data-from", edge.from);
+      path.setAttribute("data-to", edge.to);
+      if (edge.label) {
+        path.setAttribute("data-label", edge.label);
+      }
+      edgesGroup.appendChild(path);
+      
+      // Add hover label
+      if (edge.label) {
+        const midX = (fromPos.x + toPos.x) / 2;
+        const midY = (fromPos.y + toPos.y) / 2;
+        const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        text.setAttribute("x", midX);
+        text.setAttribute("y", midY - 5);
+        text.setAttribute("class", "flow-edge-label");
+        text.setAttribute("data-edge-idx", idx);
+        text.textContent = edge.label;
+        edgesGroup.appendChild(text);
+      }
+    });
+    
+    // Render nodes
+    nodes.forEach((node, idx) => {
+      const pos = positions.get(node.id);
+      if (!pos) return;
+      
+      const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      g.setAttribute("class", `flow-node-group flow-node-${idx}`);
+      g.setAttribute("data-node-id", node.id);
+      g.setAttribute("data-animation-delay", idx * 0.08);
+      
+      // Circle background (for glow)
+      const glowCircle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      glowCircle.setAttribute("cx", pos.x);
+      glowCircle.setAttribute("cy", pos.y);
+      glowCircle.setAttribute("r", pos.isCurrent ? 35 : 28);
+      glowCircle.setAttribute("class", pos.isCurrent ? "flow-node-circle flow-current" : "flow-node-circle");
+      glowCircle.setAttribute("filter", pos.isCurrent ? "url(#active-glow-filter)" : "url(#glow-filter)");
+      g.appendChild(glowCircle);
+      
+      // Node role text
+      const roleText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      roleText.setAttribute("x", pos.x);
+      roleText.setAttribute("y", pos.y);
+      roleText.setAttribute("class", "flow-node-role");
+      roleText.textContent = node.role.substring(0, 12);
+      g.appendChild(roleText);
+      
+      // Node kind badge (small text below)
+      const kindText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      kindText.setAttribute("x", pos.x);
+      kindText.setAttribute("y", pos.y + 12);
+      kindText.setAttribute("class", "flow-node-kind");
+      kindText.textContent = node.kind || "related";
+      g.appendChild(kindText);
+      
+      // Tooltip (shown on hover)
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${node.role} (${trimPathLabel(node.label)})`;
+      g.appendChild(title);
+      
+      nodesGroup.appendChild(g);
+    });
+    
+    // Setup hover interactions
+    setupFlowHoverInteractions(nodes, positions);
+  }
+
+  function setupFlowHoverInteractions(nodes, positions) {
+    const nodeGroups = document.querySelectorAll(".flow-node-group");
+    const edges = document.querySelectorAll(".flow-edge");
+    
+    nodeGroups.forEach((group) => {
+      const nodeId = group.getAttribute("data-node-id");
+      
+      group.addEventListener("mouseenter", () => {
+        // Highlight connected edges
+        edges.forEach((edge) => {
+          if (edge.getAttribute("data-from") === nodeId || edge.getAttribute("data-to") === nodeId) {
+            edge.classList.add("active");
+            const label = edge.nextElementSibling;
+            if (label && label.classList.contains("flow-edge-label")) {
+              label.classList.add("visible");
+            }
+          } else {
+            edge.classList.add("inactive");
+          }
+        });
+      });
+      
+      group.addEventListener("mouseleave", () => {
+        edges.forEach((edge) => {
+          edge.classList.remove("active", "inactive");
+        });
+        document.querySelectorAll(".flow-edge-label").forEach((label) => {
+          label.classList.remove("visible");
+        });
+      });
+    });
   }
 
   function trimPathLabel(filePath) {
@@ -2357,13 +3353,133 @@
       .map(([x, y], index) => `${index === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`)
       .join(" ");
 
+    const baseline = height - padding;
+    const firstX = coords[0][0].toFixed(2);
+    const lastX = coords[coords.length - 1][0].toFixed(2);
+    const areaPath = `${path} L${lastX} ${baseline.toFixed(2)} L${firstX} ${baseline.toFixed(2)} Z`;
+
     const selectedPoint = Math.max(0, Math.min(coords.length - 1, appState.selectedIndex));
     const [dotX, dotY] = coords[selectedPoint];
 
-    elements.sparklinePath.setAttribute("d", path);
+    if (elements.sparklineArea) {
+      elements.sparklineArea.setAttribute("d", areaPath);
+    }
+
+    if (elements.sparklinePathBase) {
+      elements.sparklinePathBase.classList.remove("chart-refresh");
+    }
+    if (elements.sparklinePathUp) {
+      elements.sparklinePathUp.classList.remove("chart-refresh");
+    }
+    if (elements.sparklinePathDown) {
+      elements.sparklinePathDown.classList.remove("chart-refresh");
+    }
+    if (elements.sparklinePathFlat) {
+      elements.sparklinePathFlat.classList.remove("chart-refresh");
+    }
+    if (elements.sparklineArea) {
+      elements.sparklineArea.classList.remove("chart-refresh");
+    }
+    if (elements.sparklinePathBase) {
+      void elements.sparklinePathBase.getBoundingClientRect();
+      elements.sparklinePathBase.classList.add("chart-refresh");
+    }
+    if (elements.sparklinePathUp) {
+      elements.sparklinePathUp.classList.add("chart-refresh");
+    }
+    if (elements.sparklinePathDown) {
+      elements.sparklinePathDown.classList.add("chart-refresh");
+    }
+    if (elements.sparklinePathFlat) {
+      elements.sparklinePathFlat.classList.add("chart-refresh");
+    }
+    if (elements.sparklineArea) {
+      elements.sparklineArea.classList.add("chart-refresh");
+    }
+
+    const segmentPath = (kind) => {
+      const parts = [];
+      for (let i = 1; i < coords.length; i += 1) {
+        const diff = Number(values[i]) - Number(values[i - 1]);
+        const currentKind = diff > 1 ? "up" : diff < -1 ? "down" : "flat";
+        if (currentKind !== kind) {
+          continue;
+        }
+        const [x1, y1] = coords[i - 1];
+        const [x2, y2] = coords[i];
+        parts.push(`M${x1.toFixed(2)} ${y1.toFixed(2)} L${x2.toFixed(2)} ${y2.toFixed(2)}`);
+      }
+      return parts.join(" ");
+    };
+
+    if (elements.sparklinePathBase) {
+      elements.sparklinePathBase.setAttribute("d", path);
+    }
+    if (elements.sparklinePathUp) {
+      elements.sparklinePathUp.setAttribute("d", segmentPath("up"));
+    }
+    if (elements.sparklinePathDown) {
+      elements.sparklinePathDown.setAttribute("d", segmentPath("down"));
+    }
+    if (elements.sparklinePathFlat) {
+      elements.sparklinePathFlat.setAttribute("d", segmentPath("flat"));
+    }
     elements.sparklineDot.setAttribute("cx", dotX.toFixed(2));
     elements.sparklineDot.setAttribute("cy", dotY.toFixed(2));
-    elements.latencyValue.textContent = selectedEntry ? `${selectedEntry.score}` : "0";
+
+    if (Number.isFinite(appState.signalDotX) && Number.isFinite(appState.signalDotY)) {
+      const dx = appState.signalDotX - dotX;
+      const dy = appState.signalDotY - dotY;
+      elements.sparklineDot.style.transition = "none";
+      elements.sparklineDot.style.transform = `translate(${dx.toFixed(2)}px, ${dy.toFixed(2)}px)`;
+      void elements.sparklineDot.getBoundingClientRect();
+      elements.sparklineDot.style.transition = "transform 520ms cubic-bezier(0.23, 1, 0.32, 1)";
+      elements.sparklineDot.style.transform = "translate(0, 0)";
+    }
+
+    appState.signalDotX = dotX;
+    appState.signalDotY = dotY;
+
+    elements.sparklineDot.classList.remove("pulse");
+    void elements.sparklineDot.offsetWidth;
+    elements.sparklineDot.classList.add("pulse");
+
+    try {
+      if (elements.sparklinePathBase) {
+        const length = elements.sparklinePathBase.getTotalLength();
+        elements.sparklinePathBase.style.transition = "none";
+        elements.sparklinePathBase.style.strokeDasharray = `${length.toFixed(2)}`;
+        elements.sparklinePathBase.style.strokeDashoffset = `${length.toFixed(2)}`;
+        void elements.sparklinePathBase.getBoundingClientRect();
+        elements.sparklinePathBase.style.transition = "stroke-dashoffset 520ms cubic-bezier(0.23, 1, 0.32, 1)";
+        elements.sparklinePathBase.style.strokeDashoffset = "0";
+      }
+    } catch {
+      // Keep rendering resilient on browsers that may fail path length reads.
+    }
+
+    const currentValue = selectedEntry ? Number(selectedEntry.score || 0) : 0;
+    const previousValue = selectedPoint > 0
+      ? Number(values[selectedPoint - 1] || currentValue)
+      : currentValue;
+    const delta = currentValue - previousValue;
+    const trendEpsilon = 1;
+    const trendClass = delta > trendEpsilon
+      ? "trend-up"
+      : delta < -trendEpsilon
+        ? "trend-down"
+        : "trend-flat";
+    const stateClassName = selectedEntry ? `state-${stateClass(selectedEntry.state)}` : "state-normal";
+    const trendClasses = ["trend-up", "trend-down", "trend-flat"];
+    const stateClasses = ["state-normal", "state-warning", "state-error"];
+
+    elements.sparklineArea.classList.remove(...trendClasses, ...stateClasses);
+    elements.sparklineDot.classList.remove(...trendClasses, ...stateClasses);
+
+    elements.sparklineArea.classList.add(trendClass, stateClassName);
+    elements.sparklineDot.classList.add(trendClass, stateClassName);
+
+    elements.latencyValue.textContent = String(currentValue);
   }
 
   function updateAnalysis(entry, animateText) {
