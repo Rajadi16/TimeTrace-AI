@@ -3,3 +3,6 @@ out/
 .vscode-test/
 .git.timetrace-backup/
 *.vsix
+sandbox/*.js
+sandbox/*.js.map
+.DS_Store

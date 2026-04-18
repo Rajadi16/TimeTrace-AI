@@ -29,7 +29,7 @@
         {
           "id": "timetraceAi",
           "title": "TimeTrace AI",
-          "icon": "media/timetrace.svg"
+          "icon": "media/timetrace-activity-v3.svg"
         }
       ]
     },
@@ -54,6 +54,10 @@
       {
         "command": "timetrace-ai.showLatestAnalysis",
         "title": "TimeTrace AI: Show Latest Analysis"
+      },
+      {
+        "command": "timetrace-ai.injectTestRuntimeEvent",
+        "title": "TimeTrace AI: Inject Test Runtime Event"
       }
     ]
   },

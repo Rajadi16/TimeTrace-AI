@@ -72,10 +72,14 @@ export interface Incident {
 export interface RootCauseCandidate {
 	filePath: string;
 	relatedSymbol?: string;
+	/** Human-readable explanation synthesized from ranking signals */
+	reason?: string;
 	/** 0..1 normalized confidence */
 	confidence: number;
 	/** Transparent signals driving the ranking */
 	signals: string[];
+	/** Ordered list of evidence snippets backing the reason/confidence */
+	linkedEvidence?: string[];
 }
 
 // ---------------------------------------------------------------------------
