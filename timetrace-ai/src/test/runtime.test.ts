@@ -436,4 +436,30 @@ suite('V3 Runtime Test Suite', () => {
 			`Expected weak-evidence confidence calibration. Got: ${result.probableRootCauses[0].confidence}`,
 		);
 	});
+
+	// ------------------------------------------------------------------------
+	// Test 13: RCA candidates include explicit reason/evidence text
+	// ------------------------------------------------------------------------
+	test('13. RCA candidates expose reason and linked evidence from ranking signals', () => {
+		const result = analyzeChange(
+			{
+				filePath: '/tmp/example.ts',
+				language: 'typescript',
+				timestamp: '2026-04-17T10:00:30.000Z',
+				previousCode: 'function run(v?: string) {\n  if (!v) return;\n  return v.trim();\n}\n',
+				currentCode: 'function run(v?: string) {\n  return v.trim();\n}\n',
+			},
+			{
+				existingIncidents: [],
+				graph: { imports: {}, exports: {}, exportSignatures: {} },
+				recentSaves: {},
+				workspaceRoot: '/tmp',
+			},
+		);
+
+		assert.ok(result.probableRootCauses.length > 0, 'Expected RCA candidates');
+		const candidate = result.probableRootCauses[0];
+		assert.ok(typeof candidate.reason === 'string' && candidate.reason.length > 0, 'Expected non-empty RCA reason');
+		assert.ok(Array.isArray(candidate.linkedEvidence) && candidate.linkedEvidence.length > 0, 'Expected linked evidence list');
+	});
 });

@@ -282,6 +282,20 @@
     if (message.type === "analysisResult" && !hasHistoryArray && appState.liveEntries.length > 0) {
       const latestIndex = appState.liveEntries.length - 1;
       const latestEntry = appState.liveEntries[latestIndex];
+      const nextChangedLineRanges = Array.isArray(payload.changedLineRanges) ? payload.changedLineRanges : latestEntry.changedLineRanges;
+      const nextReasons = Array.isArray(payload.reasons) ? payload.reasons : latestEntry.reasons;
+      const nextFindings = Array.isArray(payload.findings)
+        ? payload.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, nextChangedLineRanges || [], nextReasons || []))
+        : latestEntry.findings;
+      const nextRootCauses = Array.isArray(payload.probableRootCauses)
+        ? payload.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, latestEntry.filePath, nextFindings || []))
+        : latestEntry.probableRootCauses;
+      const nextRuntimeEvents = Array.isArray(payload.runtimeEvents)
+        ? payload.runtimeEvents.map((item, eventIndex) => normalizeRuntimeEvent(item, eventIndex, latestEntry.filePath || "", latestEntry.checkpointId, latestEntry.timestamp, latestEntry.state, latestEntry.checkpoint, nextFindings || [], nextRootCauses || []))
+        : latestEntry.runtimeEvents;
+      const nextIncidents = Array.isArray(payload.incidents)
+        ? payload.incidents.map((item, incidentIndex) => normalizeIncident(item, incidentIndex, latestEntry.filePath, nextFindings || [], nextRootCauses || [], nextRuntimeEvents || [], latestEntry.score, latestEntry.previousState, latestEntry.state, latestEntry.timestamp, latestEntry.checkpoint, latestEntry.checkpointId))
+        : latestEntry.incidents;
 
       appState.mode = "live";
       appState.liveEntries[latestIndex] = {
@@ -289,13 +303,13 @@
         state: payload.state || latestEntry.state,
         score: Number.isFinite(Number(payload.score)) ? Number(payload.score) : latestEntry.score,
         previousState: payload.previousState || latestEntry.previousState,
-        reasons: Array.isArray(payload.reasons) ? payload.reasons : latestEntry.reasons,
+        reasons: nextReasons,
         analysis: payload.analysis || latestEntry.analysis,
-        changedLineRanges: Array.isArray(payload.changedLineRanges) ? payload.changedLineRanges : latestEntry.changedLineRanges,
-        findings: Array.isArray(payload.findings) ? payload.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, latestEntry.changedLineRanges || [], latestEntry.reasons || [])) : latestEntry.findings,
-        probableRootCauses: Array.isArray(payload.probableRootCauses) ? payload.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, latestEntry.filePath, latestEntry.findings || [])) : latestEntry.probableRootCauses,
-        incidents: Array.isArray(payload.incidents) ? payload.incidents.map((item, incidentIndex) => normalizeIncident(item, incidentIndex, latestEntry.filePath, latestEntry.findings || [], latestEntry.probableRootCauses || [], latestEntry.runtimeEvents || [], latestEntry.score, latestEntry.previousState, latestEntry.state, latestEntry.timestamp, latestEntry.checkpoint, latestEntry.checkpointId)) : latestEntry.incidents,
-        runtimeEvents: Array.isArray(payload.runtimeEvents) ? payload.runtimeEvents.map((item, eventIndex) => normalizeRuntimeEvent(item, eventIndex, latestEntry.filePath || "", latestEntry.checkpointId, latestEntry.timestamp, latestEntry.state, latestEntry.checkpoint, latestEntry.findings || [], latestEntry.probableRootCauses || [])) : latestEntry.runtimeEvents,
+        changedLineRanges: nextChangedLineRanges,
+        findings: nextFindings,
+        probableRootCauses: nextRootCauses,
+        incidents: nextIncidents,
+        runtimeEvents: nextRuntimeEvents,
         relatedFiles: Array.isArray(payload.relatedFiles) ? payload.relatedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.relatedFiles,
         impactedFiles: Array.isArray(payload.impactedFiles) ? payload.impactedFiles.map(normalizeFileContext).filter(Boolean) : latestEntry.impactedFiles
       };
@@ -453,7 +467,7 @@
       : [];
     const codePreview = rawEntry.codePreview || {};
     const score = Number(rawEntry.score);
-    const checkpointId = String(rawEntry.checkpointId || buildCheckpointId(rawEntry.filePath || filePath || "", rawEntry.timestamp || String(index)));
+    const checkpointId = String(rawEntry.checkpointId || rawEntry.timestamp || buildCheckpointId(rawEntry.filePath || filePath || "", rawEntry.timestamp || String(index)));
     const findings = Array.isArray(rawEntry.findings)
       ? rawEntry.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, changedLineRanges, reasons))
       : buildFallbackFindings(reasons, changedLineRanges, rawEntry.analysis);
@@ -518,7 +532,11 @@
       severity: normalizeFindingSeverity(rawFinding.severity),
       confidence: clampConfidence(rawFinding.confidence, 0.86 - index * 0.08),
       lineRanges: normalizeLineRanges(rawFinding.lineRanges, changedLineRanges),
-      symbol: rawFinding.symbol ? String(rawFinding.symbol) : undefined
+      symbol: rawFinding.symbol ? String(rawFinding.symbol) : undefined,
+      kind: rawFinding.kind ? String(rawFinding.kind) : undefined,
+      evidence: rawFinding.evidence ? String(rawFinding.evidence) : undefined,
+      filePath: rawFinding.filePath ? String(rawFinding.filePath) : undefined,
+      timestamp: rawFinding.timestamp ? String(rawFinding.timestamp) : undefined
     };
   }
 
@@ -547,9 +565,17 @@
     return {
       id: String(rawCause.id || `root-cause-${index + 1}`),
       filePath: String(rawCause.filePath || fallbackFilePath || ""),
-      reason: String(rawCause.reason || rawCause.message || "Probable cause"),
+      reason: String(
+        rawCause.reason
+        || rawCause.message
+        || (Array.isArray(rawCause.signals) && rawCause.signals.length > 0 ? rawCause.signals[0] : "Probable cause")
+      ),
       confidence: clampConfidence(rawCause.confidence, 0.82 - index * 0.08),
-      linkedEvidence: Array.isArray(rawCause.linkedEvidence) ? rawCause.linkedEvidence.map(String) : findings.slice(0, 2).map((finding) => finding.id)
+      linkedEvidence: Array.isArray(rawCause.linkedEvidence)
+        ? rawCause.linkedEvidence.map(String)
+        : Array.isArray(rawCause.signals) && rawCause.signals.length > 0
+          ? rawCause.signals.map(String).slice(0, 4)
+          : findings.slice(0, 2).map((finding) => finding.id)
     };
   }
 
@@ -609,7 +635,7 @@
 
     return {
       id: String(rawIncident.id || `incident-${index + 1}`),
-      summary: String(rawIncident.summary || rawIncident.message || "Incident detail"),
+      summary: String(rawIncident.summary || rawIncident.title || rawIncident.message || "Incident detail"),
       status: incidentStatus,
       runtimeConfirmationState,
       runtimeConfirmed: Boolean(rawIncident.runtimeConfirmed),
@@ -617,13 +643,25 @@
       timelineTrail: Array.isArray(rawIncident.timelineTrail) && rawIncident.timelineTrail.length > 0
         ? rawIncident.timelineTrail.map(normalizeTimelinePoint).filter(Boolean)
         : buildTrail(timestamp, previousState, state, score, checkpoint),
-      surfacedFile: String(rawIncident.surfacedFile || rawIncident.filePath || filePath || ""),
+      surfacedFile: String(rawIncident.surfacedFile || rawIncident.filePath || rawIncident.impactedFiles?.[0] || rawIncident.relatedFiles?.[0] || filePath || ""),
       linkedCheckpointId: String(rawIncident.linkedCheckpointId || checkpointId),
-      linkedFindings: Array.isArray(rawIncident.linkedFindings) ? rawIncident.linkedFindings.map(String) : findings.map((finding) => finding.id),
+      linkedFindings: Array.isArray(rawIncident.linkedFindings)
+        ? rawIncident.linkedFindings.map(String)
+        : Array.isArray(rawIncident.findings)
+          ? rawIncident.findings.map(String)
+          : findings.map((finding) => finding.id),
       probableCauses: Array.isArray(rawIncident.probableCauses) ? rawIncident.probableCauses.map(String) : probableRootCauses.map((cause) => cause.id),
-      linkedRuntimeEvents: Array.isArray(rawIncident.linkedRuntimeEvents) ? rawIncident.linkedRuntimeEvents.map(String) : runtimeEvents.map((event) => event.id),
+      linkedRuntimeEvents: Array.isArray(rawIncident.linkedRuntimeEvents)
+        ? rawIncident.linkedRuntimeEvents.map(String)
+        : Array.isArray(rawIncident.runtimeEventIds)
+          ? rawIncident.runtimeEventIds.map(String)
+          : runtimeEvents.map((event) => event.id),
       lastRuntimeEventAt: rawIncident.lastRuntimeEventAt ? String(rawIncident.lastRuntimeEventAt) : runtimeEvents[0]?.timestamp,
-      evidenceCount: Number.isFinite(Number(rawIncident.evidenceCount)) ? Number(rawIncident.evidenceCount) : findings.length + runtimeEvents.length
+      evidenceCount: Number.isFinite(Number(rawIncident.evidenceCount))
+        ? Number(rawIncident.evidenceCount)
+        : Number.isFinite(Number(rawIncident.runtimeEvidenceCount))
+          ? Number(rawIncident.runtimeEvidenceCount)
+          : findings.length + runtimeEvents.length
     };
   }
 
@@ -671,9 +709,12 @@
       severity: normalizeFindingSeverity(rawEvent.severity || rawEvent.level || "WARNING"),
       filePath: rawEvent.filePath ? String(rawEvent.filePath) : filePath || undefined,
       line: Number.isFinite(Number(rawEvent.line)) ? Number(rawEvent.line) : undefined,
+      functionName: rawEvent.functionName ? String(rawEvent.functionName) : undefined,
       stackPreview: stackPreview.length > 0 ? stackPreview : buildRuntimeStackPreview(String(rawEvent.message || "Runtime event"), checkpointId, filePath),
       linkedCheckpointId: String(rawEvent.linkedCheckpointId || checkpointId),
       linkedIncidentId: rawEvent.linkedIncidentId ? String(rawEvent.linkedIncidentId) : undefined,
+      relatedFindingIds: Array.isArray(rawEvent.relatedFindingIds) ? rawEvent.relatedFindingIds.map(String) : [],
+      evidence: Array.isArray(rawEvent.evidence) ? rawEvent.evidence.map(String) : [],
       runtimeConfirmed: Boolean(rawEvent.runtimeConfirmed),
       confirmationState: normalizeRuntimeConfirmationState(rawEvent.confirmationState, state, Boolean(rawEvent.runtimeConfirmed)),
       evidenceCount: Number.isFinite(Number(rawEvent.evidenceCount)) ? Number(rawEvent.evidenceCount) : Math.max(1, findings.length + probableRootCauses.length)
@@ -1156,7 +1197,8 @@
       return String(timestamp);
     }
 
-    return parsed.toLocaleString();
+    // Keep canonical ISO timestamp so checkpoint IDs and timeline correlation IDs are stable.
+    return parsed.toISOString();
   }
 
   function normalizeState(value) {
@@ -1619,9 +1661,12 @@
     elements.runtimeDetailFile.textContent = event.filePath || "-";
     elements.runtimeDetailLine.textContent = event.line ? `L${event.line}` : "-";
     elements.runtimeDetailCheckpoint.textContent = event.linkedCheckpointId || "-";
-    elements.runtimeDetailStack.textContent = Array.isArray(event.stackPreview) && event.stackPreview.length > 0
-      ? event.stackPreview.join("\n")
-      : "No stack trace captured yet.";
+    const evidence = Array.isArray(event.evidence) ? event.evidence : [];
+    const evidenceLines = evidence.slice(0, 6).map((item) => `evidence: ${item}`);
+    const stackLines = Array.isArray(event.stackPreview) && event.stackPreview.length > 0
+      ? event.stackPreview
+      : ["No stack trace captured yet."];
+    elements.runtimeDetailStack.textContent = [...evidenceLines, ...stackLines].join("\n");
   }
 
   function renderEmptyRuntimeDetail() {

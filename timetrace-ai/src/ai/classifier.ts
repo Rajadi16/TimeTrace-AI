@@ -174,6 +174,16 @@ function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
 }
 
+function buildRootCauseReason(signals: string[], relatedSymbol?: string): string {
+	if (signals.length > 0) {
+		return signals[0];
+	}
+	if (relatedSymbol) {
+		return `related to symbol "${relatedSymbol}"`;
+	}
+	return 'limited direct evidence; ranked by relative likelihood';
+}
+
 export function rankRootCauses(inputs: RootCauseInput[]): RootCauseCandidate[] {
 	if (inputs.length === 0) {
 		return [];
@@ -317,6 +327,8 @@ export function rankRootCauses(inputs: RootCauseInput[]): RootCauseCandidate[] {
 			candidate.confidence = Number(clamp(candidate.confidence - 0.04, 0.2, 0.99).toFixed(2));
 			candidate.signals.push('limited supporting signals; confidence calibrated');
 		}
+		candidate.reason = buildRootCauseReason(candidate.signals, candidate.relatedSymbol);
+		candidate.linkedEvidence = candidate.signals.slice(0, 4);
 	}
 
 	ranked.sort((a, b) => b.confidence - a.confidence);
