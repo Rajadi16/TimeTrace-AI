@@ -16,6 +16,11 @@ import {
 import type { TimeTraceAnalysisResult } from './ai';
 import { RuntimeStore } from './ai/runtimeStore';
 import { ingestRuntimeEvent } from './ai/runtimeIngestion';
+import {
+	captureRuntimeSignalsFromDiagnostics,
+	RuntimeSignalDeduper,
+	type DiagnosticCaptureInput,
+} from './ai/runtimeCapture';
 import type { RuntimeEvent, RawRuntimeInput } from './ai';
 
 interface SidebarTimelinePayload {
@@ -350,9 +355,125 @@ export function activate(context: vscode.ExtensionContext) {
 	const snapshotStore = new SnapshotStore(context.workspaceState);
 	const runtimeStore = new RuntimeStore(context.workspaceState);
 	const provider = new TimeTraceSidebarProvider(context.extensionUri);
+	const runtimeSignalDeduper = new RuntimeSignalDeduper();
+	const pendingRuntimeRefreshByFile = new Map<string, NodeJS.Timeout>();
 
 	// Determine workspace root for import resolution
 	const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+	const MAX_RUNTIME_SIGNALS_PER_BATCH = 24;
+	const RUNTIME_REFRESH_DEBOUNCE_MS = 1200;
+
+	function toCaptureSeverity(severity: vscode.DiagnosticSeverity): DiagnosticCaptureInput['severity'] {
+		switch (severity) {
+			case vscode.DiagnosticSeverity.Error:
+				return 'error';
+			case vscode.DiagnosticSeverity.Warning:
+				return 'warning';
+			case vscode.DiagnosticSeverity.Information:
+				return 'info';
+			default:
+				return 'hint';
+		}
+	}
+
+	function extractDiagnosticCode(diagnostic: vscode.Diagnostic): string | number | undefined {
+		if (typeof diagnostic.code === 'string' || typeof diagnostic.code === 'number') {
+			return diagnostic.code;
+		}
+		if (
+			diagnostic.code &&
+			typeof diagnostic.code === 'object' &&
+			'value' in diagnostic.code &&
+			(typeof diagnostic.code.value === 'string' || typeof diagnostic.code.value === 'number')
+		) {
+			return diagnostic.code.value;
+		}
+		return undefined;
+	}
+
+	function scheduleRuntimeRefresh(filePath: string): void {
+		const existingTimer = pendingRuntimeRefreshByFile.get(filePath);
+		if (existingTimer) {
+			clearTimeout(existingTimer);
+		}
+
+		const timer = setTimeout(() => {
+			pendingRuntimeRefreshByFile.delete(filePath);
+			const document = vscode.workspace.textDocuments.find(
+				(doc) => doc.uri.scheme === 'file' && doc.uri.fsPath === filePath,
+			);
+			if (!document || document.isUntitled || document.isDirty) {
+				return;
+			}
+			void analyzeDocument(document);
+		}, RUNTIME_REFRESH_DEBOUNCE_MS);
+
+		pendingRuntimeRefreshByFile.set(filePath, timer);
+	}
+
+	function captureRuntimeFromDiagnostics(uris: readonly vscode.Uri[]): void {
+		const timestamp = new Date().toISOString();
+		let capturedCount = 0;
+		const filesNeedingRefresh = new Set<string>();
+
+		for (const uri of uris) {
+			if (capturedCount >= MAX_RUNTIME_SIGNALS_PER_BATCH) {
+				break;
+			}
+			if (uri.scheme !== 'file') {
+				continue;
+			}
+
+			const filePath = uri.fsPath;
+			const normalizedPath = normalizeAbsolutePath(filePath, workspaceRoot);
+			if (!normalizedPath) {
+				continue;
+			}
+			if (workspaceRoot && !normalizedPath.startsWith(workspaceRoot)) {
+				continue;
+			}
+
+			const diagnostics = vscode.languages.getDiagnostics(uri);
+			if (diagnostics.length === 0) {
+				continue;
+			}
+
+			const captureInputs: DiagnosticCaptureInput[] = diagnostics.map((diagnostic) => ({
+				message: diagnostic.message,
+				severity: toCaptureSeverity(diagnostic.severity),
+				source: diagnostic.source,
+				code: extractDiagnosticCode(diagnostic),
+				startLine: diagnostic.range.start.line,
+				startCharacter: diagnostic.range.start.character,
+			}));
+
+			const capturedSignals = captureRuntimeSignalsFromDiagnostics(normalizedPath, captureInputs, timestamp);
+			for (const signal of capturedSignals) {
+				if (capturedCount >= MAX_RUNTIME_SIGNALS_PER_BATCH) {
+					break;
+				}
+				if (runtimeSignalDeduper.isDuplicate(signal.fingerprint)) {
+					continue;
+				}
+
+				const runtimeEvent = ingestRuntimeEvent(signal.rawInput);
+				runtimeStore.saveRuntimeEvent(runtimeEvent);
+				capturedCount += 1;
+				filesNeedingRefresh.add(normalizedPath);
+			}
+		}
+
+		if (capturedCount === 0) {
+			return;
+		}
+
+		outputChannel.appendLine(
+			`[runtime-capture] captured ${capturedCount} diagnostic signal(s) across ${filesNeedingRefresh.size} file(s)`,
+		);
+		for (const filePath of filesNeedingRefresh) {
+			scheduleRuntimeRefresh(filePath);
+		}
+	}
 
 	function publishTimelineForFile(filePath: string): void {
 		const timelineHistory = snapshotStore.getTimelineHistory(filePath);
@@ -575,6 +696,9 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.workspace.onDidSaveTextDocument((document) => {
 		void analyzeDocument(document);
 	}));
+	context.subscriptions.push(vscode.languages.onDidChangeDiagnostics((event) => {
+		captureRuntimeFromDiagnostics(event.uris);
+	}));
 	context.subscriptions.push(vscode.window.onDidChangeActiveTextEditor((editor) => {
 		syncSidebarForDocument(editor?.document);
 	}));
@@ -653,6 +777,14 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand, injectTestRuntimeEventCommand);
+	context.subscriptions.push({
+		dispose: () => {
+			for (const timer of pendingRuntimeRefreshByFile.values()) {
+				clearTimeout(timer);
+			}
+			pendingRuntimeRefreshByFile.clear();
+		},
+	});
 	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
 	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
 	console.log('TimeTrace AI extension activated.');
