@@ -293,10 +293,30 @@ body.typography-elegant .code-window {
 
 .section-label,
 .card-title {
-  font-size: 0.69rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.75rem;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.11em;
-  color: var(--text-muted);
+  letter-spacing: 0.12em;
+  color: var(--text);
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.section-label::before,
+.card-title::before {
+  content: "";
+  width: 4px;
+  height: 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent), white 8%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent), transparent 78%);
+}
+
+.timeline-topline .section-label {
+  margin-bottom: 0;
 }
 
 .timeline-topline {
@@ -405,6 +425,7 @@ select {
 .timeline-progress {
   width: 0;
   right: auto;
+  left: 16px;
   background: linear-gradient(90deg, var(--ok), var(--warn), var(--danger));
   transition: width 320ms cubic-bezier(0.23, 1, 0.32, 1);
 }
@@ -473,6 +494,75 @@ select {
   margin-top: 10px;
   display: grid;
   gap: 8px;
+}
+
+.timeline-detail-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 10px 12px 12px;
+  background: color-mix(in srgb, var(--panel-strong), transparent 2%);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+.timeline-detail-card.normal {
+  --state-text: var(--ok);
+}
+
+.timeline-detail-card.warning {
+  --state-text: var(--warn);
+}
+
+.timeline-detail-card.error {
+  --state-text: var(--danger);
+}
+
+.timeline-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.timeline-detail-header strong {
+  font-size: 0.82rem;
+  line-height: 1.05;
+  letter-spacing: 0.01em;
+  flex: 1 1 auto;
+  color: var(--state-text);
+}
+
+.timeline-detail-marker {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--state-text), transparent 28%);
+  background: var(--state-text);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--bg), transparent 82%);
+}
+
+.timeline-detail-header .mini-pill {
+  font-size: 0.54rem;
+  padding: 3px 7px;
+  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg), black 3%);
+  color: var(--text-muted);
+}
+
+.timeline-detail-card p {
+  margin: 12px 0 0 20px;
+  max-width: 44ch;
+  font-size: 0.66rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+.timeline-detail-transition {
+  margin-top: 12px;
+  margin-left: 20px;
+  color: color-mix(in srgb, var(--text), var(--state-text) 18%);
+  font-size: 0.66rem;
+  line-height: 1.35;
+  opacity: 0.98;
 }
 
 .timeline-item {

@@ -1371,7 +1371,7 @@
   renderRuntimeEvents(selected.runtimeEvents, selected);
   renderIncidentList(selected.incidents, selected);
   renderIncidentDetail(selected, getSelectedIncident(selected));
-  renderUnifiedTimeline(entries);
+  renderUnifiedTimeline(selected);
     renderFileContext(selected.relatedFiles, selected.impactedFiles);
     updateCode(selected);
     updateSignalChart(entries, selected);
@@ -1499,12 +1499,31 @@
   function updateTimelineProgress(entries) {
     if (!entries.length) {
       elements.timelineProgress.style.width = "0%";
+      elements.timelineProgress.style.left = "16px";
       return;
     }
 
-    const span = Math.max(1, entries.length - 1);
-    const progressRatio = Math.min(1, appState.selectedIndex / span);
-    elements.timelineProgress.style.width = `${progressRatio * 100}%`;
+    const nodeButtons = Array.from(elements.timelineNodes.querySelectorAll(".node"));
+    const firstNode = nodeButtons[0];
+    const selectedNode = nodeButtons[Math.max(0, Math.min(nodeButtons.length - 1, appState.selectedIndex))];
+
+    if (!firstNode || !selectedNode) {
+      elements.timelineProgress.style.width = "0%";
+      elements.timelineProgress.style.left = "16px";
+      return;
+    }
+
+    const innerRect = elements.timelineInner.getBoundingClientRect();
+    const firstRect = firstNode.getBoundingClientRect();
+    const selectedRect = selectedNode.getBoundingClientRect();
+
+    const firstCenter = (firstRect.left - innerRect.left) + (firstRect.width / 2);
+    const selectedCenter = (selectedRect.left - innerRect.left) + (selectedRect.width / 2);
+    const start = Math.max(16, firstCenter);
+    const width = Math.max(0, selectedCenter - start);
+
+    elements.timelineProgress.style.left = `${start}px`;
+    elements.timelineProgress.style.width = `${width}px`;
   }
 
   function updateCheckpointDetails(entry) {
@@ -1680,135 +1699,23 @@
     elements.runtimeDetailStack.textContent = "No runtime stack captured yet.";
   }
 
-  function renderUnifiedTimeline(entries) {
-    const selectedEntry = getSelectedEntry();
+  function renderUnifiedTimeline(selectedEntry) {
     if (!selectedEntry) {
-      elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
+      elements.timelineStream.innerHTML = '<div class="empty-state">Click a checkpoint to inspect its detail.</div>';
       return;
     }
 
-    const timelineItems = Array.isArray(appState.timelineItems) && appState.timelineItems.length > 0
-      ? appState.timelineItems
-      : buildTimelineItemsFromEntries(entries);
-
-    if (timelineItems.length === 0) {
-      elements.timelineStream.innerHTML = '<div class="empty-state">No unified timeline events yet.</div>';
-      return;
-    }
-
-    const activeCheckpointId = selectedEntry.checkpointId || buildCheckpointId(selectedEntry.filePath, selectedEntry.timestamp);
-    const activeRuntimeEventId = appState.selectedRuntimeEventId;
-    const activeIncidentId = appState.selectedIncidentId;
-
-    elements.timelineStream.innerHTML = timelineItems
-      .map((item) => {
-        if (item.kind === "checkpoint") {
-          const selected = item.checkpointId === activeCheckpointId;
-          const message = selected && selectedEntry.analysis
-            ? selectedEntry.analysis
-            : `${item.state} state checkpoint`;
-          return `
-            <button class="timeline-item ${selected ? "selected" : ""}" type="button" data-timeline-kind="checkpoint" data-timeline-id="${escapeHtml(item.checkpointId)}">
-              <span class="timeline-item-marker ${stateClass(item.state)}"></span>
-              <div class="timeline-item-body">
-                <div class="finding-topline">
-                  <strong>${escapeHtml(`${item.state} checkpoint`)}</strong>
-                  <span class="mini-pill">${escapeHtml(String(item.timestamp))}</span>
-                </div>
-                <p>${escapeHtml(message)}</p>
-                <div class="finding-meta">
-                  <span>${escapeHtml(item.filePath || "checkpoint")}</span>
-                </div>
-              </div>
-            </button>
-          `;
-        }
-
-        if (item.kind === "runtimeEvent") {
-          const selected = item.runtimeEventId === activeRuntimeEventId;
-          const severityClass = item.severity === "error" ? "error" : "warning";
-          return `
-            <button class="timeline-item ${selected ? "selected" : ""}" type="button" data-timeline-kind="runtimeEvent" data-timeline-id="${escapeHtml(item.runtimeEventId)}">
-              <span class="timeline-item-marker ${severityClass}"></span>
-              <div class="timeline-item-body">
-                <div class="finding-topline">
-                  <strong>${escapeHtml(formatRuntimeEventTypeLabel(item.eventType))}</strong>
-                  <span class="mini-pill">${escapeHtml(String(item.timestamp))}</span>
-                </div>
-                <p>${escapeHtml(item.message || "Runtime event")}</p>
-                <div class="finding-meta">
-                  <span>${escapeHtml(item.filePath || "runtime")}</span>
-                </div>
-              </div>
-            </button>
-          `;
-        }
-
-        const selected = item.incidentId === activeIncidentId;
-        const statusClass = item.status === "resolved" ? "normal" : item.status === "mitigated" ? "warning" : "error";
-        return `
-          <button class="timeline-item ${selected ? "selected" : ""}" type="button" data-timeline-kind="incidentUpdate" data-timeline-id="${escapeHtml(item.incidentId)}">
-            <span class="timeline-item-marker ${statusClass}"></span>
-            <div class="timeline-item-body">
-              <div class="finding-topline">
-                <strong>${escapeHtml(`Incident ${item.status}`)}</strong>
-                <span class="mini-pill">${escapeHtml(String(item.timestamp))}</span>
-              </div>
-              <p>${escapeHtml(item.summary || "Incident update")}</p>
-              <div class="finding-meta">
-                <span>${escapeHtml(item.runtimeConfirmed ? "Runtime confirmed" : "Analysis-only")}</span>
-              </div>
-            </div>
-          </button>
-        `;
-      })
-      .join("");
-
-    elements.timelineStream.querySelectorAll("[data-timeline-kind]").forEach((button) => {
-      button.addEventListener("click", () => {
-        const kind = button.getAttribute("data-timeline-kind");
-        const id = button.getAttribute("data-timeline-id");
-        if (!kind || !id) {
-          return;
-        }
-
-        if (kind === "checkpoint") {
-          const checkpointIndex = entries.findIndex((entry) => entry.checkpointId === id || buildCheckpointId(entry.filePath, entry.timestamp) === id);
-          if (checkpointIndex >= 0) {
-            selectCheckpoint(checkpointIndex, { stopReplay: true });
-          }
-          return;
-        }
-
-        if (kind === "runtimeEvent") {
-          const runtimeEvent = entries.flatMap((entry) => Array.isArray(entry.runtimeEvents) ? entry.runtimeEvents : []).find((event) => event.id === id);
-          if (!runtimeEvent) {
-            return;
-          }
-          appState.selectedRuntimeEventId = runtimeEvent.id;
-          const selectedEntry = getSelectedEntry();
-          renderRuntimeEventDetail(runtimeEvent);
-          if (selectedEntry) {
-            const selectedIncident = findIncidentForRuntimeEvent(selectedEntry, runtimeEvent.id);
-            if (selectedIncident) {
-              appState.selectedIncidentId = selectedIncident.id;
-              renderIncidentDetail(selectedEntry, selectedIncident);
-            }
-          }
-          applyPaneVisibility();
-          return;
-        }
-
-        if (kind === "incidentUpdate") {
-          appState.selectedIncidentId = id;
-          const selectedEntry = getSelectedEntry();
-          if (selectedEntry && Array.isArray(selectedEntry.incidents)) {
-            renderIncidentList(selectedEntry.incidents, selectedEntry);
-            renderIncidentDetail(selectedEntry, getSelectedIncident(selectedEntry));
-          }
-        }
-      });
-    });
+    elements.timelineStream.innerHTML = `
+      <article class="timeline-detail-card ${stateClass(selectedEntry.state)}">
+        <div class="timeline-detail-header">
+          <span class="timeline-detail-marker ${stateClass(selectedEntry.state)}"></span>
+          <strong>${escapeHtml(String(selectedEntry.state))}</strong>
+          <span class="mini-pill">${escapeHtml(String(selectedEntry.timestamp))}</span>
+        </div>
+        <p>${escapeHtml(String(selectedEntry.analysis || "Checkpoint details"))}</p>
+        <div class="timeline-detail-transition">${escapeHtml(`${selectedEntry.previousState} → ${selectedEntry.state}`)}</div>
+      </article>
+    `;
   }
 
   function renderIncidentDetail(entry, incident) {
