@@ -2902,7 +2902,7 @@
       .map((line, index) => {
         const lineNumber = Number(snippet.startLine) + index;
         const lineClass = lineNumber === focus ? "code-line problem" : "code-line";
-        return `<div class="${lineClass}"><span class="code-line-number">${lineNumber}</span><span>${escapeHtml(String(line))}</span></div>`;
+        return `<div class="${lineClass}"><span class="code-line-number">${lineNumber}</span><span class="code-line-content">${escapeHtml(String(line))}</span></div>`;
       })
       .join("");
   }

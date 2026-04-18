@@ -2154,6 +2154,9 @@ select {
   overflow: auto;
   font-size: 0.67rem;
   line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .code-line {
@@ -2162,11 +2165,20 @@ select {
   gap: 8px;
   padding: 1px 4px;
   border-left: 2px solid transparent;
+  align-items: start;
+  min-width: 0;
 }
 
 .code-line-number {
   color: #7a8792;
   text-align: right;
+}
+
+.code-line-content {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 .code-line.problem {
@@ -3009,5 +3021,36 @@ select {
 
   .incident-reset-btn {
     grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 360px) {
+  .snippet-toolbar {
+    align-items: stretch;
+  }
+
+  .snippet-tabs,
+  .snippet-mode {
+    width: 100%;
+  }
+
+  .snippet-toolbar .toggle-btn {
+    width: 100%;
+  }
+
+  .code-go-line-controls {
+    grid-template-columns: 1fr;
+  }
+
+  #code-go-line-btn {
+    width: 100%;
+  }
+
+  .code-nav-target,
+  .code-nav-meta {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    max-width: none;
   }
 }
