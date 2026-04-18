@@ -2342,6 +2342,16 @@ select {
   background: color-mix(in srgb, var(--panel-strong), var(--accent) 4%);
 }
 
+.flow-lane-card.flow-kind-impacted {
+  border-color: color-mix(in srgb, #f59e0b, transparent 55%);
+  background: color-mix(in srgb, var(--panel-strong), #f59e0b 8%);
+}
+
+.flow-lane-card.flow-kind-root-cause {
+  border-color: color-mix(in srgb, #ef4444, transparent 52%);
+  background: color-mix(in srgb, var(--panel-strong), #ef4444 8%);
+}
+
 .flow-lane-card::before {
   content: "";
   position: absolute;
@@ -2540,6 +2550,16 @@ select {
   stroke-width: 2;
   fill: color-mix(in srgb, var(--panel-strong), var(--accent) 15%);
   animation: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.flow-node-circle.flow-impacted {
+  stroke: color-mix(in srgb, #f59e0b, transparent 12%);
+  fill: color-mix(in srgb, var(--panel-strong), #f59e0b 16%);
+}
+
+.flow-node-circle.flow-root-cause {
+  stroke: color-mix(in srgb, #ef4444, transparent 12%);
+  fill: color-mix(in srgb, var(--panel-strong), #ef4444 18%);
 }
 
 @keyframes pulse-glow {

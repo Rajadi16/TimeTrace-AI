@@ -5,11 +5,14 @@ export function handleUserRequest(userId: string, context: RequestContext): stri
   const summary = getUserSummary(userId, context);
   const auditLine = logUserRequest(userId, context);
 
-  // DEMO: null guard removal
-  // Baseline keeps this guard to avoid crashing on malformed summary payloads.
+  // DEMO A toggle (null guard removal):
+  // 1) Comment out this guard block.
+  // 2) Save.
+  // 3) Keep the direct return below active to simulate unsafe access path.
   if (!summary || !summary.displayName) {
     return `[safe-fallback] ${auditLine}`;
   }
+
   return `${summary.displayName} (${summary.tierLabel}) <${summary.contactEmail}> | ${auditLine}`;
 }
 

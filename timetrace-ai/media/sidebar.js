@@ -3128,8 +3128,8 @@
     const edges = Array.isArray(flow.edges) ? flow.edges : [];
     const isSoloNode = flow.nodes.length === 1 && edges.length === 0;
     
-    // Find the "current" node (usually first or marked as current)
-    const currentNode = flow.nodes.find(n => n.isCurrent) || flow.nodes[0];
+    // Find the current node by explicit kind when available.
+    const currentNode = flow.nodes.find((n) => String(n.kind || "") === "current") || flow.nodes[0];
     const currentIndex = flow.nodes.indexOf(currentNode);
     
     // Calculate positions using radial layout
@@ -3137,6 +3137,18 @@
     
     // Render SVG flow graph
     renderFlowGraph(flow.nodes, edges, positions, currentIndex, summaryText, isSoloNode);
+  }
+
+  function formatFlowKind(kind) {
+    const value = String(kind || "related");
+    if (value === "root-cause") {
+      return "root cause";
+    }
+    return value;
+  }
+
+  function flowKindClass(kind) {
+    return String(kind || "related").toLowerCase().replace(/[^a-z0-9_-]/g, "-");
   }
 
   function calculateRadialPositions(nodes, currentIndex) {
@@ -3223,13 +3235,14 @@
               return `<span class="flow-lane-chip">${escapeHtml(edge.label || "→")} ${escapeHtml(targetLabel)}</span>`;
             }).join("");
             const extraCount = connected.length > 2 ? `<span class="flow-lane-chip flow-lane-chip-more">+${connected.length - 2} more</span>` : "";
+            const kindClass = flowKindClass(node.kind);
             return `
-              <article class="flow-lane-card${node.kind === "current" ? " is-current" : ""}" data-node-id="${escapeHtml(node.id)}">
+              <article class="flow-lane-card flow-kind-${kindClass}${node.kind === "current" ? " is-current" : ""}" data-node-id="${escapeHtml(node.id)}">
                 <div class="flow-lane-index">${index + 1}</div>
                 <div class="flow-lane-content">
                   <div class="flow-lane-topline">
                     <strong>${escapeHtml(node.role)}</strong>
-                    <span class="mini-pill">${escapeHtml(node.kind || "related")}</span>
+                    <span class="mini-pill">${escapeHtml(formatFlowKind(node.kind || "related"))}</span>
                   </div>
                   <div class="flow-lane-path">${escapeHtml(trimPathLabel(node.label))}</div>
                   <div class="flow-lane-chips">${edgePills}${extraCount}</div>
@@ -3290,7 +3303,10 @@
       glowCircle.setAttribute("cx", pos.x);
       glowCircle.setAttribute("cy", pos.y);
       glowCircle.setAttribute("r", pos.isCurrent ? 35 : 28);
-      glowCircle.setAttribute("class", pos.isCurrent ? "flow-node-circle flow-current" : "flow-node-circle");
+      const kindClass = flowKindClass(node.kind);
+      glowCircle.setAttribute("class", pos.isCurrent
+        ? `flow-node-circle flow-current flow-${kindClass}`
+        : `flow-node-circle flow-${kindClass}`);
       glowCircle.setAttribute("filter", pos.isCurrent ? "url(#active-glow-filter)" : "url(#glow-filter)");
       g.appendChild(glowCircle);
       
@@ -3307,7 +3323,7 @@
       kindText.setAttribute("x", pos.x);
       kindText.setAttribute("y", pos.y + 12);
       kindText.setAttribute("class", "flow-node-kind");
-      kindText.textContent = node.kind || "related";
+      kindText.textContent = formatFlowKind(node.kind || "related");
       g.appendChild(kindText);
       
       // Tooltip (shown on hover)

@@ -45,7 +45,7 @@ interface CodePaneFlowNode {
 	id: string;
 	label: string;
 	role: string;
-	kind: 'current' | 'import' | 'downstream' | 'related';
+	kind: 'current' | 'root-cause' | 'impacted' | 'import' | 'downstream' | 'related';
 }
 
 interface CodePaneFlowEdge {
@@ -146,26 +146,47 @@ function inferCodeFlow(
 	const absoluteCurrent = normalizeAbsolutePath(filePath, workspaceRoot);
 	const imports = graph.imports[absoluteCurrent] ?? [];
 	const downstream = computeDirectDownstream(graph, absoluteCurrent);
-	const related = [...result.relatedFiles, ...result.impactedFiles]
+	const related = result.relatedFiles
 		.map((item) => normalizeAbsolutePath(item, workspaceRoot))
+		.filter(Boolean);
+	const impacted = result.impactedFiles
+		.map((item) => normalizeAbsolutePath(item, workspaceRoot))
+		.filter(Boolean);
+	const rootCauseFiles = result.probableRootCauses
+		.map((candidate) => normalizeAbsolutePath(candidate.filePath, workspaceRoot))
 		.filter(Boolean);
 
 	const candidates = [
 		absoluteCurrent,
+		...rootCauseFiles,
+		...impacted,
 		...imports,
 		...downstream,
 		...related,
 	].filter(Boolean);
 
 	const uniqueCandidates = [...new Set(candidates)].slice(0, 10);
+	const rootCauseSet = new Set(rootCauseFiles);
+	const impactedSet = new Set(impacted);
+	const importSet = new Set(imports);
+	const downstreamSet = new Set(downstream);
+	const relatedSet = new Set(related);
+
 	const nodes: CodePaneFlowNode[] = uniqueCandidates.map((candidate, index) => {
-		const kind: CodePaneFlowNode['kind'] = candidate === absoluteCurrent
-			? 'current'
-			: imports.includes(candidate)
-				? 'import'
-				: downstream.includes(candidate)
-					? 'downstream'
-					: 'related';
+		let kind: CodePaneFlowNode['kind'] = 'related';
+		if (candidate === absoluteCurrent) {
+			kind = 'current';
+		} else if (rootCauseSet.has(candidate)) {
+			kind = 'root-cause';
+		} else if (impactedSet.has(candidate)) {
+			kind = 'impacted';
+		} else if (downstreamSet.has(candidate)) {
+			kind = 'downstream';
+		} else if (importSet.has(candidate)) {
+			kind = 'import';
+		} else if (relatedSet.has(candidate)) {
+			kind = 'related';
+		}
 
 		return {
 			id: `node-${index + 1}`,
@@ -198,15 +219,39 @@ function inferCodeFlow(
 		}
 	}
 
-	const summary = edges.length > 0
-		? `Inferred from import and downstream dependency signals across ${nodes.length} files.`
+	for (const impactedFile of impacted.slice(0, 4)) {
+		const fromLabel = toWorkspaceRelative(absoluteCurrent, workspaceRoot);
+		const toLabel = toWorkspaceRelative(impactedFile, workspaceRoot);
+		const from = idByLabel.get(fromLabel);
+		const to = idByLabel.get(toLabel);
+		if (from && to) {
+			edges.push({ from, to, label: 'impacts' });
+		}
+	}
+
+	for (const rootCauseFile of rootCauseFiles.slice(0, 3)) {
+		const fromLabel = toWorkspaceRelative(rootCauseFile, workspaceRoot);
+		const toLabel = toWorkspaceRelative(absoluteCurrent, workspaceRoot);
+		const from = idByLabel.get(fromLabel);
+		const to = idByLabel.get(toLabel);
+		if (from && to) {
+			edges.push({ from, to, label: 'suspected source' });
+		}
+	}
+
+	const uniqueEdges = [...new Map(edges.map((edge) => [`${edge.from}|${edge.to}|${edge.label ?? ''}`, edge])).values()];
+	const impactedCount = nodes.filter((node) => node.kind === 'impacted').length;
+	const rootCauseCount = nodes.filter((node) => node.kind === 'root-cause').length;
+
+	const summary = uniqueEdges.length > 0
+		? `Dependency path across ${nodes.length} modules. ${impactedCount} impacted module(s), ${rootCauseCount} likely source module(s).`
 		: `Inferred from filename roles for ${nodes.length} file${nodes.length === 1 ? '' : 's'}.`;
 
 	return {
 		title: 'Inferred Code Path',
 		summary,
 		nodes,
-		edges,
+		edges: uniqueEdges,
 	};
 }
 

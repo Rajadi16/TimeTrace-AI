@@ -24,19 +24,28 @@ export function getUserSummary(userId: string, context: RequestContext): UserSum
     };
   }
 
+  // DEMO D toggle (diagnostic runtime signal):
+  // Uncomment this line and save to create a TypeScript diagnostic.
+  // const debugMode = missingConfigFlag;
+
   return {
     id: user.id,
     displayName: user.name,
-    // DEMO: optional chaining/fallback removal
-    // During demo, remove ?? fallback to create a risk and clearer RCA path.
+    // DEMO B toggle (optional chaining/fallback removal):
+    // Baseline:
     contactEmail: user.email?.toLowerCase() ?? "missing-email@demo.dev",
+    // Demo variant (uncomment this line + comment baseline line):
+    // contactEmail: user.email.toLowerCase(),
     tierLabel: user.tier === "pro" ? "Pro Plan" : "Free Plan"
   };
 }
 
 export function logUserRequest(userId: string, context: RequestContext): string {
-  // DEMO: TODO/hacky workaround
-  // During demo, expand this workaround and save to trigger low-confidence hygiene findings.
+  // DEMO B toggle (hygiene signal):
+  // Baseline comment above keeps code clean.
+  // Demo variant:
+  // TODO: quick demo hack; should be replaced with structured logger
+  // HACK: keep request labels short to reduce payload size for now
   const requestLabel = context.requestId || "unknown-request";
   return `request=${requestLabel} user=${userId}`;
 }

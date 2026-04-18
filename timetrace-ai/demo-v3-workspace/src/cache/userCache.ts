@@ -14,9 +14,20 @@ export function setCachedUser(user: UserRecord): void {
 export function warmUserCache(): void {
   const allUsers = findAllUsers();
 
+  // DEMO E toggle (performance-risk loop escalation):
+  // Replace the baseline nested loop below with this heavier triple-loop block.
+  // for (const user of allUsers) {
+  //   for (const candidateA of allUsers) {
+  //     for (const candidateB of allUsers) {
+  //       if (!userCache.has(user.id)) {
+  //         userCache.set(user.id, user);
+  //       }
+  //     }
+  //   }
+  // }
+
   for (const user of allUsers) {
-    // DEMO: possible loop/performance risk
-    // During demo, duplicate this inner loop to simulate a heavier accidental path.
+    // Baseline loop (keep active by default).
     for (const _candidate of allUsers) {
       if (!userCache.has(user.id)) {
         userCache.set(user.id, user);
