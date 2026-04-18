@@ -9,3 +9,7 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+demo-v3-workspace/**
+docs/**
+sandbox/**
+V3_BACKEND_CONTRACT.md
