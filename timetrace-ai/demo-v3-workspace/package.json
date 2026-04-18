@@ -1,0 +1,13 @@
+{
+  "name": "timetrace-v3-demo-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Small TypeScript demo app for TimeTrace AI V3 walkthroughs.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
