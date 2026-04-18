@@ -61,6 +61,14 @@ export class SnapshotStore {
 		return this.readRecords<SnapshotRecord>(this.snapshotKey)[filePath];
 	}
 
+	public hasSnapshots(): boolean {
+		return Object.keys(this.readRecords<SnapshotRecord>(this.snapshotKey)).length > 0;
+	}
+
+	public getSnapshotFilePaths(): string[] {
+		return Object.keys(this.readRecords<SnapshotRecord>(this.snapshotKey));
+	}
+
 	public saveSnapshot(snapshot: SnapshotRecord): void {
 		const records = this.readRecords<SnapshotRecord>(this.snapshotKey);
 		records[snapshot.filePath] = snapshot;
@@ -140,6 +148,22 @@ export class SnapshotStore {
 		const stored = this.memento.get<Record<string, number>>(this.recentSavesKey) ?? {};
 		this.cache.set(this.recentSavesKey, stored);
 		return stored;
+	}
+
+	/**
+	 * Clears all persisted TimeTrace checkpoint and analysis state.
+	 * Useful for deterministic demo runs.
+	 */
+	public async clearAll(): Promise<void> {
+		this.cache.clear();
+		await Promise.all([
+			this.memento.update(this.snapshotKey, undefined),
+			this.memento.update(this.analysisKey, undefined),
+			this.memento.update(this.timelineKey, undefined),
+			this.memento.update(this.incidentKey, undefined),
+			this.memento.update(this.graphKey, undefined),
+			this.memento.update(this.recentSavesKey, undefined),
+		]);
 	}
 
 	// ---------------------------------------------------------------------------

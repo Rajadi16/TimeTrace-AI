@@ -73,4 +73,9 @@ export class RuntimeStore {
 	public invalidateCache(): void {
 		this.cache = undefined;
 	}
+
+	public async clearAll(): Promise<void> {
+		this.cache = [];
+		await this.memento.update(this.eventsKey, undefined);
+	}
 }

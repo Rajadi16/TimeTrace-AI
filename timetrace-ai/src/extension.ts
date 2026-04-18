@@ -350,7 +350,40 @@ function buildTimelineCheckpointRecord(
 	};
 }
 
-export function activate(context: vscode.ExtensionContext) {
+function enforceInitialCheckpoint(result: TimeTraceAnalysisResult): TimeTraceAnalysisResult {
+	if (result.checkpoint) {
+		return result;
+	}
+
+	const reasons = result.reasons.length > 0
+		? result.reasons
+		: ['Initial workspace scan'];
+
+	return {
+		...result,
+		checkpoint: true,
+		reasons,
+		analysis: `Initial workspace checkpoint captured. ${result.analysis}`,
+	};
+}
+
+function inferLanguageIdFromPath(filePath: string): string {
+	const ext = path.extname(filePath).toLowerCase();
+	switch (ext) {
+		case '.ts':
+			return 'typescript';
+		case '.tsx':
+			return 'typescriptreact';
+		case '.js':
+			return 'javascript';
+		case '.jsx':
+			return 'javascriptreact';
+		default:
+			return 'plaintext';
+	}
+}
+
+export async function activate(context: vscode.ExtensionContext) {
 	const outputChannel = vscode.window.createOutputChannel('TimeTrace AI');
 	const snapshotStore = new SnapshotStore(context.workspaceState);
 	const runtimeStore = new RuntimeStore(context.workspaceState);
@@ -360,8 +393,18 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Determine workspace root for import resolution
 	const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+	const workspaceName = workspaceRoot ? path.basename(workspaceRoot) : '';
+	const isDemoWorkspace = workspaceName.toLowerCase() === 'demo-v3-workspace';
 	const MAX_RUNTIME_SIGNALS_PER_BATCH = 24;
 	const RUNTIME_REFRESH_DEBOUNCE_MS = 1200;
+	const INITIAL_WORKSPACE_SCAN_KEY = 'timetrace-ai.initialWorkspaceCheckpointComplete';
+
+	if (isDemoWorkspace) {
+		await snapshotStore.clearAll();
+		await runtimeStore.clearAll();
+		await context.workspaceState.update(INITIAL_WORKSPACE_SCAN_KEY, false);
+		outputChannel.appendLine('[demo-reset] Cleared persisted checkpoints and runtime history for demo workspace activation.');
+	}
 
 	function toCaptureSeverity(severity: vscode.DiagnosticSeverity): DiagnosticCaptureInput['severity'] {
 		switch (severity) {
@@ -569,6 +612,111 @@ export function activate(context: vscode.ExtensionContext) {
 		return graph;
 	}
 
+	async function runInitialWorkspaceCheckpointScan(): Promise<void> {
+		if (!workspaceRoot) {
+			return;
+		}
+		if (context.workspaceState.get<boolean>(INITIAL_WORKSPACE_SCAN_KEY) === true) {
+			return;
+		}
+		if (snapshotStore.hasSnapshots()) {
+			await context.workspaceState.update(INITIAL_WORKSPACE_SCAN_KEY, true);
+			return;
+		}
+
+		const uris = await vscode.workspace.findFiles(
+			'**/*.{ts,tsx,js,jsx}',
+			'**/{node_modules,out,dist,.git,.vscode-test}/**',
+			500,
+		);
+		if (uris.length === 0) {
+			await context.workspaceState.update(INITIAL_WORKSPACE_SCAN_KEY, true);
+			return;
+		}
+
+		let graph = emptyGraph();
+		const sourceByFile = new Map<string, string>();
+		for (const uri of uris) {
+			try {
+				const code = Buffer.from(await vscode.workspace.fs.readFile(uri)).toString('utf8');
+				sourceByFile.set(uri.fsPath, code);
+				graph = updateGraphForFile(graph, uri.fsPath, code, workspaceRoot);
+			} catch {
+				// Skip unreadable files so initial scan is resilient.
+			}
+		}
+
+		snapshotStore.saveWorkspaceGraph(graph);
+
+		let incidents = snapshotStore.getIncidents();
+		let savedCheckpoints = 0;
+		for (const [filePath, currentCode] of sourceByFile) {
+			const timestamp = new Date().toISOString();
+			const persistedCheckpoints = snapshotStore.getTimelineHistory(filePath);
+			const runtimeEvents = runtimeStore.getEventsByFile(filePath);
+
+			const rawResult = runTimeTraceAnalysis(
+				{
+					filePath,
+					language: inferLanguageIdFromPath(filePath),
+					timestamp,
+					// Baseline checkpoint should be zero-diff so initial state is deterministic.
+					previousCode: currentCode,
+					currentCode,
+					previousState: 'NORMAL',
+				},
+				{
+					existingIncidents: incidents,
+					graph,
+					recentSaves: snapshotStore.getRecentSaves(),
+					workspaceRoot,
+					runtimeEvents,
+					recentCheckpoints: persistedCheckpoints,
+					persistedCheckpoints,
+				},
+			);
+
+			const result = enforceInitialCheckpoint(rawResult);
+			const codePreview = buildCodePreview(currentCode, currentCode, result.changedLineRanges);
+
+			snapshotStore.saveSnapshot({
+				filePath,
+				language: inferLanguageIdFromPath(filePath),
+				timestamp,
+				code: currentCode,
+				state: result.state,
+			});
+			snapshotStore.saveLatestAnalysis({
+				filePath,
+				timestamp,
+				result,
+				findings: result.findings,
+			});
+			snapshotStore.saveIncidents(result.incidents);
+			incidents = result.incidents;
+
+			if (result.runtimeEvents.length > 0) {
+				runtimeStore.saveRuntimeEvents(result.runtimeEvents);
+			}
+
+			snapshotStore.saveTimelineCheckpoint(
+				buildTimelineCheckpointRecord(filePath, timestamp, result, codePreview),
+			);
+			savedCheckpoints += 1;
+		}
+
+		await context.workspaceState.update(INITIAL_WORKSPACE_SCAN_KEY, true);
+		outputChannel.appendLine(
+			`[initial-scan] Saved ${savedCheckpoints} checkpoint(s) across ${sourceByFile.size} file(s).`,
+		);
+
+		const activeFilePath = vscode.window.activeTextEditor?.document.uri.fsPath;
+		if (activeFilePath) {
+			publishTimelineForFile(activeFilePath);
+			publishLatestAnalysisForFile(activeFilePath);
+		}
+	}
+
 	async function analyzeDocument(document: vscode.TextDocument) {
 		if (document.isUntitled || document.uri.scheme !== 'file') {
 			return undefined;
@@ -576,22 +724,10 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const timestamp = new Date().toISOString();
 		const previousSnapshot = snapshotStore.getSnapshot(document.uri.fsPath);
+		const isFirstCheckpointForFile = !previousSnapshot;
 		const currentCode = document.getText();
-
-		if (!previousSnapshot) {
-			// First save — update graph, store baseline snapshot
-			const graph = await rebuildWorkspaceGraph(document, currentCode);
-			snapshotStore.saveWorkspaceGraph(graph);
-			snapshotStore.saveSnapshot({
-				filePath: document.uri.fsPath,
-				language: document.languageId,
-				timestamp,
-				code: currentCode,
-			});
-			outputChannel.appendLine(`[baseline] Stored snapshot for ${document.uri.fsPath}`);
-			publishTimelineForFile(document.uri.fsPath);
-			return undefined;
-		}
+		const previousCode = isFirstCheckpointForFile ? currentCode : (previousSnapshot?.code ?? '');
+		const previousState = previousSnapshot?.state ?? 'NORMAL';
 
 		// Update graph for this file
 		const graph = await rebuildWorkspaceGraph(document, currentCode);
@@ -602,14 +738,14 @@ export function activate(context: vscode.ExtensionContext) {
 		const persistedCheckpoints = snapshotStore.getTimelineHistory(document.uri.fsPath);
 
 		// Run the full 6-step analysis pipeline
-		const result = runTimeTraceAnalysis(
+		const rawResult = runTimeTraceAnalysis(
 			{
 				filePath: document.uri.fsPath,
 				language: document.languageId,
 				timestamp,
-				previousCode: previousSnapshot.code,
+				previousCode,
 				currentCode,
-				previousState: previousSnapshot.state,
+				previousState,
 			},
 			{
 				existingIncidents: snapshotStore.getIncidents(),
@@ -621,8 +757,9 @@ export function activate(context: vscode.ExtensionContext) {
 				persistedCheckpoints,
 			},
 		);
+		const result = isFirstCheckpointForFile ? enforceInitialCheckpoint(rawResult) : rawResult;
 
-		const codePreview = buildCodePreview(previousSnapshot.code, currentCode, result.changedLineRanges);
+		const codePreview = buildCodePreview(previousCode, currentCode, result.changedLineRanges);
 
 		// Persist
 		snapshotStore.saveSnapshot({
@@ -667,7 +804,7 @@ export function activate(context: vscode.ExtensionContext) {
 			...result,
 			codePane: buildCodePanePayload(
 				document.uri.fsPath,
-				previousSnapshot.code,
+				previousCode,
 				currentCode,
 				result,
 				workspaceRoot,
@@ -675,11 +812,13 @@ export function activate(context: vscode.ExtensionContext) {
 			),
 		});
 
-		if (result.checkpoint) {
+		if (result.checkpoint && !isFirstCheckpointForFile) {
 			outputChannel.appendLine(
 				`[checkpoint] ${document.uri.fsPath} ${result.previousState} -> ${result.state}`,
 			);
 			void vscode.window.showInformationMessage(`TimeTrace AI checkpoint: ${result.analysis}`);
+		} else if (isFirstCheckpointForFile) {
+			outputChannel.appendLine(`[initial-file] Saved first checkpoint for ${document.uri.fsPath}`);
 		}
 
 		return result;
@@ -712,7 +851,6 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const result = await analyzeDocument(editor.document);
 		if (!result) {
-			void vscode.window.showInformationMessage('Baseline snapshot captured. Edit and save the file again to trigger analysis.');
 			return;
 		}
 
@@ -777,6 +915,7 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	context.subscriptions.push(analyzeCurrentDocumentCommand, showLatestAnalysisCommand, injectTestRuntimeEventCommand);
+	void runInitialWorkspaceCheckpointScan();
 	context.subscriptions.push({
 		dispose: () => {
 			for (const timer of pendingRuntimeRefreshByFile.values()) {
@@ -786,7 +925,7 @@ export function activate(context: vscode.ExtensionContext) {
 		},
 	});
 	syncSidebarForDocument(vscode.window.activeTextEditor?.document);
-	outputChannel.appendLine('TimeTrace AI activated. Save a file or run the analyze command to generate checkpoint history.');
+	outputChannel.appendLine('TimeTrace AI activated. Initial workspace scan runs automatically, then save files to continue checkpoint history.');
 	console.log('TimeTrace AI extension activated.');
 }
 

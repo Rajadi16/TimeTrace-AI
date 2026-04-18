@@ -7,10 +7,9 @@ export function handleUserRequest(userId: string, context: RequestContext): stri
 
   // DEMO: null guard removal
   // Baseline keeps this guard to avoid crashing on malformed summary payloads.
-  '''if (!summary || !summary.displayName) {
+  if (!summary || !summary.displayName) {
     return `[safe-fallback] ${auditLine}`;
   }
-'''
   return `${summary.displayName} (${summary.tierLabel}) <${summary.contactEmail}> | ${auditLine}`;
 }
 

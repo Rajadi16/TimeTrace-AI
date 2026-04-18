@@ -104,8 +104,8 @@
     checkpointTimestamp: document.getElementById("checkpoint-timestamp"),
     overviewRootCauseSummary: document.getElementById("overview-root-cause-summary"),
     overviewRootCauseList: document.getElementById("overview-root-cause-list"),
-    rootCard: document.getElementById("root-cause-card"),
-    rootCauseList: document.getElementById("root-cause-list"),
+    rootCard: document.getElementById("root-cause-card") || document.getElementById("overview-root-cause-card"),
+    rootCauseList: document.getElementById("root-cause-list") || document.getElementById("overview-root-cause-list"),
     snippetLayout: document.querySelector(".snippet-layout"),
     beforeSnippetPanel: document.getElementById("before-snippet-panel"),
     afterSnippetPanel: document.getElementById("after-snippet-panel"),
@@ -429,9 +429,11 @@
       const nextFindings = Array.isArray(payload.findings)
         ? payload.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, nextChangedLineRanges || [], nextReasons || []))
         : latestEntry.findings;
-      const nextRootCauses = Array.isArray(payload.probableRootCauses)
+      const nextRootCauses = Array.isArray(payload.probableRootCauses) && payload.probableRootCauses.length > 0
         ? payload.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, latestEntry.filePath, nextFindings || []))
-        : latestEntry.probableRootCauses;
+        : (Array.isArray(latestEntry.probableRootCauses) && latestEntry.probableRootCauses.length > 0
+          ? latestEntry.probableRootCauses
+          : buildFallbackRootCauses(latestEntry.filePath, nextReasons || [], nextFindings || []));
       const nextRuntimeEvents = Array.isArray(payload.runtimeEvents)
         ? payload.runtimeEvents.map((item, eventIndex) => normalizeRuntimeEvent(item, eventIndex, latestEntry.filePath || "", latestEntry.checkpointId, latestEntry.timestamp, latestEntry.state, latestEntry.checkpoint, nextFindings || [], nextRootCauses || []))
         : latestEntry.runtimeEvents;
@@ -612,7 +614,7 @@
     const findings = Array.isArray(rawEntry.findings)
       ? rawEntry.findings.map((item, findingIndex) => normalizeFinding(item, findingIndex, changedLineRanges, reasons))
       : buildFallbackFindings(reasons, changedLineRanges, rawEntry.analysis);
-    const probableRootCauses = Array.isArray(rawEntry.probableRootCauses)
+    const probableRootCauses = Array.isArray(rawEntry.probableRootCauses) && rawEntry.probableRootCauses.length > 0
       ? rawEntry.probableRootCauses.map((item, causeIndex) => normalizeRootCause(item, causeIndex, filePath, findings))
       : buildFallbackRootCauses(filePath, reasons, findings);
     const relatedFiles = Array.isArray(rawEntry.relatedFiles)
@@ -1510,9 +1512,13 @@
 
     updateCheckpointDetails(selected);
     renderFindings(selected.findings, selected);
-  renderRuntimeEvents(selected.runtimeEvents, selected);
-  renderIncidentList(selected.incidents, selected);
-  renderIncidentDetail(selected, getSelectedIncident(selected));
+    const rootCauses = Array.isArray(selected.probableRootCauses) && selected.probableRootCauses.length > 0
+      ? selected.probableRootCauses
+      : buildFallbackRootCauses(selected.filePath || appState.sourceLabel, selected.reasons || [], selected.findings || []);
+    renderRootCauseCandidates(rootCauses);
+    renderRuntimeEvents(selected.runtimeEvents, selected);
+    renderIncidentList(selected.incidents, selected);
+    renderIncidentDetail(selected, getSelectedIncident(selected));
     updateCode(selected);
     updateSignalChart(entries, selected);
     updateAnalysis(selected, animateText);
@@ -1532,6 +1538,15 @@
       elements.incidentOverview.textContent = "No incidents available yet.";
     }
     elements.findingsList.innerHTML = '<div class="empty-state">No findings yet.</div>';
+    if (elements.rootCauseList) {
+      elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+    }
+    if (elements.overviewRootCauseList && elements.overviewRootCauseList !== elements.rootCauseList) {
+      elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+    }
+    if (elements.overviewRootCauseSummary) {
+      elements.overviewRootCauseSummary.textContent = "No strong root-cause signal is available for the selected checkpoint.";
+    }
     elements.runtimeEventsList.innerHTML = '<div class="empty-state">No runtime events captured yet.</div>';
     elements.incidentList.innerHTML = '<div class="empty-state">No incidents yet.</div>';
     renderEmptyRuntimeDetail();
@@ -1798,11 +1813,19 @@
   }
 
   function renderRootCauseCandidates(probableRootCauses) {
-    elements.rootCard.classList.remove("hidden");
+    if (elements.rootCard) {
+      elements.rootCard.classList.remove("hidden");
+    }
     if (!Array.isArray(probableRootCauses) || probableRootCauses.length === 0) {
-      elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
-      elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
-      elements.overviewRootCauseSummary.textContent = "No strong root-cause signal is available for the selected checkpoint.";
+      if (elements.rootCauseList) {
+        elements.rootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+      }
+      if (elements.overviewRootCauseList && elements.overviewRootCauseList !== elements.rootCauseList) {
+        elements.overviewRootCauseList.innerHTML = '<div class="empty-state">No root-cause candidates yet.</div>';
+      }
+      if (elements.overviewRootCauseSummary) {
+        elements.overviewRootCauseSummary.textContent = "No strong root-cause signal is available for the selected checkpoint.";
+      }
       return;
     }
 
@@ -1858,16 +1881,22 @@
       })
       .join("");
 
-    elements.rootCauseList.innerHTML = renderedRootCauses;
-    elements.overviewRootCauseList.innerHTML = renderedRootCauses;
+    if (elements.rootCauseList) {
+      elements.rootCauseList.innerHTML = renderedRootCauses;
+    }
+    if (elements.overviewRootCauseList && elements.overviewRootCauseList !== elements.rootCauseList) {
+      elements.overviewRootCauseList.innerHTML = renderedRootCauses;
+    }
     
     // Setup toggle handlers
     setupRootCauseToggles();
 
     const top = probableRootCauses[0];
-    elements.overviewRootCauseSummary.textContent = top
-      ? `Top inferred cause: ${top.reason || top.filePath || "Unknown"}`
-      : "AI inferred causes for the selected checkpoint.";
+    if (elements.overviewRootCauseSummary) {
+      elements.overviewRootCauseSummary.textContent = top
+        ? `Top inferred cause: ${top.reason || top.filePath || "Unknown"}`
+        : "AI inferred causes for the selected checkpoint.";
+    }
   }
 
   function setupRootCauseToggles() {

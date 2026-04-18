@@ -272,6 +272,12 @@ export function extractFeatures(input: {
 	changedLineRanges?: number[][];
 }): FeatureSet {
 	const cosmetic = isCosmeticOnly(input.previousCode, input.currentCode);
+	const previousOptionalChainCount = countMatches(input.previousCode, /\?\./g);
+	const currentOptionalChainCount = countMatches(input.currentCode, /\?\./g);
+	const previousNullishFallbackCount = countMatches(input.previousCode, /\?\?/g);
+	const currentNullishFallbackCount = countMatches(input.currentCode, /\?\?/g);
+	const nullSafetyGuardRemoved = previousOptionalChainCount > currentOptionalChainCount
+		|| previousNullishFallbackCount > currentNullishFallbackCount;
 
 	const previousMetrics = {
 		complexity: estimateComplexity(input.previousCode),
@@ -321,7 +327,7 @@ export function extractFeatures(input: {
 	if (changedLineRanges.length > 0) {
 		const first = changedLineRanges[0] as [number, number];
 		if (!cosmetic) {
-			if (previousMetrics.guardCount > currentMetrics.guardCount) {
+			if (previousMetrics.guardCount > currentMetrics.guardCount || nullSafetyGuardRemoved) {
 				featureLineRanges['null_check_removed'] = first;
 			}
 			if (previousMetrics.tryCatchCount > currentMetrics.tryCatchCount) {
@@ -339,7 +345,10 @@ export function extractFeatures(input: {
 	return {
 		syntaxFailure: cosmetic ? false : detectSyntaxFailure(input.language, input.currentCode),
 		undefinedIdentifierDetected: cosmetic ? false : detectUndefinedIdentifiers(input.language, input.currentCode),
-		nullCheckRemoved: !cosmetic && previousMetrics.guardCount > currentMetrics.guardCount,
+		nullCheckRemoved: !cosmetic && (
+			previousMetrics.guardCount > currentMetrics.guardCount
+			|| nullSafetyGuardRemoved
+		),
 		tryCatchRemoved: !cosmetic && previousMetrics.tryCatchCount > currentMetrics.tryCatchCount,
 		heavyLoopAdded: !cosmetic && currentMetrics.loopCount > previousMetrics.loopCount,
 		complexityDelta: cosmetic ? 0 : Math.max(0, currentMetrics.complexity - previousMetrics.complexity),

@@ -29,7 +29,7 @@ export function getUserSummary(userId: string, context: RequestContext): UserSum
     displayName: user.name,
     // DEMO: optional chaining/fallback removal
     // During demo, remove ?? fallback to create a risk and clearer RCA path.
-    contactEmail: user.email?.toLowerCase() ??, 
+    contactEmail: user.email.toLowerCase(),
     tierLabel: user.tier === "pro" ? "Pro Plan" : "Free Plan"
   };
 }
