@@ -1028,49 +1028,50 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 			<div class="card-title">Checkpoint Signal</div>
 			<div class="sparkline-wrap">
 				<svg class="sparkline" id="sparkline" viewBox="0 0 180 54" preserveAspectRatio="none" aria-label="Checkpoint signal sparkline">
-					<path id="sparkline-path" class="sparkline-path"></path>
+					<defs>
+						<linearGradient id="sparkline-area-gradient" x1="0" y1="0" x2="0" y2="1">
+							<stop offset="0%" stop-color="rgba(156, 163, 175, 0.38)" />
+							<stop offset="100%" stop-color="rgba(156, 163, 175, 0.02)" />
+						</linearGradient>
+						<filter id="sparkline-glow" x="-40%" y="-40%" width="180%" height="180%">
+							<feGaussianBlur stdDeviation="1.6" result="blur" />
+							<feMerge>
+								<feMergeNode in="blur" />
+								<feMergeNode in="SourceGraphic" />
+							</feMerge>
+						</filter>
+					</defs>
+					<path id="sparkline-area" class="sparkline-area"></path>
+					<path id="sparkline-path-base" class="sparkline-path-base"></path>
+					<path id="sparkline-path-up" class="sparkline-path-up"></path>
+					<path id="sparkline-path-down" class="sparkline-path-down"></path>
+					<path id="sparkline-path-flat" class="sparkline-path-flat"></path>
 					<circle id="sparkline-dot" class="sparkline-dot" r="3"></circle>
 				</svg>
 			</div>
 			<div class="sparkline-meta">
 				<span>Current</span>
-				<strong id="latency-value"></strong>
+				<strong id="latency-value">0</strong>
 			</div>
 		</section>
+
 
 		<section class="card runtime-card reveal" id="runtime-events-card" data-pane="insights">
 			<div class="card-title">Runtime Events</div>
-			<div class="runtime-events-list" id="runtime-events-list"></div>
-			<div class="runtime-detail" id="runtime-detail">
-				<div class="mini-title">Event Detail</div>
-				<div class="runtime-detail-header">
-					<span class="mini-pill" id="runtime-detail-type">No event selected</span>
-					<span class="mini-pill" id="runtime-detail-status">Waiting</span>
-				</div>
-				<p id="runtime-detail-message">Select a runtime event to inspect stack details and links.</p>
-				<div class="runtime-detail-grid">
-					<div><span>Timestamp</span><strong id="runtime-detail-time">-</strong></div>
-					<div><span>File</span><strong id="runtime-detail-file">-</strong></div>
-					<div><span>Line</span><strong id="runtime-detail-line">-</strong></div>
-					<div><span>Linked checkpoint</span><strong id="runtime-detail-checkpoint">-</strong></div>
-				</div>
-				<pre class="runtime-stack" id="runtime-detail-stack">No runtime stack captured yet.</pre>
+			<div class="runtime-events-toolbar" id="runtime-events-toolbar">
+				<span class="runtime-events-count" id="runtime-events-count">0 events</span>
+				<span class="runtime-events-loaded" id="runtime-events-loaded">Scroll to load more</span>
 			</div>
+			<div class="runtime-events-list" id="runtime-events-list"></div>
 		</section>
 
-		<section class="card root-cause reveal hidden" id="root-cause-card" data-pane="insights">
-			<div class="card-title">Root-Cause Candidates</div>
-			<div class="ranking-list" id="root-cause-list"></div>
-		</section>
 
 		<section class="card code-card reveal" id="code-card" data-pane="code">
-			<div class="card-title">Relevant Code Segment</div>
-			<p class="card-subtitle">Only impacted lines are shown</p>
+			<div class="card-title">Code Focus</div>
 			<div class="code-impact" id="changed-lines"></div>
 			<div class="code-nav" id="code-nav">
 				<div class="code-nav-header">
 					<div class="mini-title">Editor Navigation</div>
-					<div class="code-nav-subtitle">Jump from analysis to source instantly</div>
 				</div>
 				<div class="code-nav-actions" id="code-nav-actions"></div>
 				<div class="code-go-line">
@@ -1079,6 +1080,16 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 						<input id="code-go-line-input" type="number" min="1" step="1" placeholder="42" />
 						<button class="btn btn-secondary" id="code-go-line-btn" type="button">Go</button>
 					</div>
+				</div>
+			</div>
+			<div class="snippet-toolbar" id="snippet-toolbar">
+				<div class="snippet-tabs" role="tablist" aria-label="Snapshot tabs">
+					<button class="toggle-btn active" id="snippet-tab-after" type="button" role="tab" aria-selected="true">After</button>
+					<button class="toggle-btn" id="snippet-tab-before" type="button" role="tab" aria-selected="false">Before</button>
+				</div>
+				<div class="snippet-mode" role="group" aria-label="Snapshot layout mode">
+					<button class="toggle-btn active" id="snippet-mode-tab" type="button" aria-pressed="true">Tabs</button>
+					<button class="toggle-btn" id="snippet-mode-split" type="button" aria-pressed="false">Split</button>
 				</div>
 			</div>
 			<div class="snippet-layout" aria-live="polite">
@@ -1097,66 +1108,82 @@ class TimeTraceSidebarProvider implements vscode.WebviewViewProvider {
 					<pre class="code-window" id="after-code-window"></pre>
 				</section>
 			</div>
-			<div class="code-flow" id="code-flow">
+			<div class="code-flow" id="code-flow" data-parallax-target>
 				<div class="mini-title">Inferred Architecture Path</div>
 				<div class="code-flow-summary" id="code-flow-summary"></div>
-				<div class="code-flow-nodes" id="code-flow-nodes"></div>
+				<div class="code-flow-container" id="code-flow-nodes">
+					<div class="flow-hero-host" id="flow-hero-host"></div>
+					<div class="flow-lane-host" id="flow-lane-host"></div>
+					<svg class="flow-graph" id="flow-graph-svg" viewBox="0 0 800 400" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+						<defs>
+							<filter id="glow-filter">
+								<feGaussianBlur stdDeviation="3" result="coloredBlur" />
+								<feMerge>
+									<feMergeNode in="coloredBlur" />
+									<feMergeNode in="SourceGraphic" />
+								</feMerge>
+							</filter>
+							<filter id="active-glow-filter">
+								<feGaussianBlur stdDeviation="4" result="coloredBlur" />
+								<feMerge>
+									<feMergeNode in="coloredBlur" />
+									<feMergeNode in="SourceGraphic" />
+								</feMerge>
+							</filter>
+							<linearGradient id="accent-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+								<stop offset="0%" style="stop-color:#4ade80;stop-opacity:0.3" />
+								<stop offset="100%" style="stop-color:#22c55e;stop-opacity:0.1" />
+							</linearGradient>
+						</defs>
+						<g class="flow-edges" id="flow-edges"></g>
+						<g class="flow-nodes" id="flow-svg-nodes"></g>
+					</svg>
+				</div>
 			</div>
 		</section>
 
 		<section class="card flow-card reveal" id="impact-flow-card" data-pane="insights">
 			<div class="card-title">Findings</div>
+			<p class="card-subtitle" id="findings-overview">No findings available yet.</p>
 			<div class="findings-list" id="findings-list"></div>
 		</section>
 
 		<section class="card analysis-card reveal" id="analysis-card" data-pane="insights">
 			<div class="card-title">Incident Detail</div>
+			<p class="card-subtitle" id="incident-overview">No incidents available yet.</p>
+			<div class="incident-controls" id="incident-controls">
+				<input id="incident-search-input" type="search" placeholder="Search incident summary or file" aria-label="Search incidents" />
+				<div class="incident-filter-row">
+					<select id="incident-status-filter" aria-label="Filter incidents by status">
+						<option value="all">All status</option>
+						<option value="open">Open</option>
+						<option value="mitigated">Mitigated</option>
+						<option value="resolved">Resolved</option>
+					</select>
+					<label class="incident-runtime-filter" for="incident-runtime-only">
+						<input id="incident-runtime-only" type="checkbox" />
+						<span>Runtime confirmed only</span>
+					</label>
+					<button class="btn btn-secondary incident-reset-btn" id="incident-filter-reset" type="button">Reset</button>
+				</div>
+			</div>
 			<div class="incident-list" id="incident-list"></div>
 			<div class="incident-detail" id="incident-detail">
-				<div class="incident-detail-header">
-					<div>
-						<div class="mini-title">Selected Incident</div>
-						<strong id="incident-detail-summary">No incident selected</strong>
+				<div class="incident-detail-headline">
+					<strong id="incident-detail-summary">No incident selected</strong>
+					<div class="incident-detail-badges">
+						<span class="mini-pill" id="incident-detail-status">Waiting</span>
+						<span class="mini-pill" id="incident-detail-runtime-confirmation">Suspected</span>
 					</div>
-					<span class="mini-pill" id="incident-detail-status">Waiting</span>
-				</div>
-				<div class="runtime-confirmation-row">
-					<span class="mini-pill" id="incident-detail-runtime-confirmation">Suspected</span>
-					<span class="mini-pill" id="incident-detail-severity">State</span>
 				</div>
 				<div class="incident-meta-grid">
 					<div><span>Surfaced file</span><strong id="incident-detail-file">-</strong></div>
-					<div><span>Checkpoint</span><strong id="incident-detail-checkpoint">-</strong></div>
 					<div><span>Runtime evidence</span><strong id="incident-detail-runtime-count">0</strong></div>
-					<div><span>Last runtime event</span><strong id="incident-detail-last-runtime">-</strong></div>
 				</div>
-				<p class="incident-reason" id="incident-detail-reason">Waiting for incident selection.</p>
-				<div class="incident-section">
-					<div class="mini-title">Linked Findings</div>
-					<div class="linked-chip-row" id="incident-detail-findings"></div>
+				<div class="incident-reason-block">
+					<span>Why this incident is flagged</span>
+					<p class="incident-reason" id="incident-detail-reason">Waiting for incident selection.</p>
 				</div>
-				<div class="incident-section">
-					<div class="mini-title">Root-Cause Candidates</div>
-					<div class="linked-chip-row" id="incident-detail-causes"></div>
-				</div>
-				<div class="incident-section">
-					<div class="mini-title">Runtime Evidence</div>
-					<div class="linked-chip-row" id="incident-detail-runtime-events"></div>
-				</div>
-			</div>
-			<div class="file-context-grid">
-				<div>
-					<div class="mini-title">Related Files</div>
-					<div class="context-list" id="related-files-list"></div>
-				</div>
-				<div>
-					<div class="mini-title">Impacted Files</div>
-					<div class="context-list" id="impacted-files-list"></div>
-				</div>
-			</div>
-			<div class="compat-block">
-				<div class="mini-title">Compatibility Summary</div>
-				<p id="analysis-summary"></p>
 			</div>
 		</section>
 	</main>
